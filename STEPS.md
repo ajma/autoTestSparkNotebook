@@ -26,3 +26,5 @@ sampled_df.show()
 6. Click "Remote Spark Kernel"
 7. Select the first one in the list (it might be "andm-jupyter"). This might take a really long time.
 8. Execute all the cells in the notebook
+9. Wait up to 5 minutes for the notebook to finish executing
+10. Check if the notebook cell succeeded. If it did, then this passed. Otherwise this failed.
