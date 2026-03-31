@@ -114,6 +114,48 @@ def wait_for_stable_screen(timeout=120, stable_duration=5, poll_interval=2):
     print(f"  Timed out after {timeout}s, proceeding anyway.")
 
 
+def wait_for_picker_populated(timeout=120, stable_duration=5, poll_interval=2):
+    """Wait for the kernel picker list to populate.
+
+    First captures a baseline screenshot, then waits for a significant visual
+    change (indicating the kernels list has loaded), and finally waits for the
+    screen to stabilize after that change.
+    """
+    print(f"  Waiting for kernel picker to populate (up to {timeout}s)...")
+    baseline = np.array(pyautogui.screenshot())
+    start = time.time()
+    change_detected = False
+
+    while time.time() - start < timeout:
+        time.sleep(poll_interval)
+        curr = np.array(pyautogui.screenshot())
+        diff = np.mean(np.abs(curr.astype(int) - baseline.astype(int)))
+
+        if not change_detected:
+            if diff > 2.0:  # meaningful change from baseline
+                elapsed = time.time() - start
+                print(f"  Picker content changed after {elapsed:.0f}s, waiting to stabilize...")
+                change_detected = True
+                # Now wait for stability after the change
+                prev = curr
+                stable_since = time.time()
+                while time.time() - start < timeout:
+                    time.sleep(poll_interval)
+                    curr2 = np.array(pyautogui.screenshot())
+                    diff2 = np.mean(np.abs(curr2.astype(int) - prev.astype(int)))
+                    prev = curr2
+                    if diff2 < 1.0:
+                        if time.time() - stable_since >= stable_duration:
+                            elapsed = time.time() - start
+                            print(f"  Picker stable after {elapsed:.0f}s.")
+                            return
+                    else:
+                        stable_since = time.time()
+                break
+
+    print(f"  Timed out after {timeout}s, proceeding anyway.")
+
+
 def check_notebook_output(notebook_path):
     """Read the saved .ipynb file and check cell outputs for the completion marker.
 
@@ -256,7 +298,7 @@ def automate_vscode(run_number=1):
 
     # Step 7: Select the first one in the list (might take a long time)
     print("Selecting first kernel in list (this may take a while)...")
-    wait_for_stable_screen(timeout=120, stable_duration=5, poll_interval=2)
+    wait_for_picker_populated(timeout=120, stable_duration=5, poll_interval=2)
     pyautogui.press("enter")
     wait_for_stable_screen(timeout=120, stable_duration=5, poll_interval=2)
 
