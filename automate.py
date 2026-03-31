@@ -283,6 +283,89 @@ def close_vscode():
     time.sleep(3)
 
 
+import math
+
+
+def create_grid_video(video_paths, output_path):
+    """Combine multiple videos into a single grid video using ffmpeg.
+
+    Arranges videos in a grid (e.g., 2x2 for 4 videos, 2x1 for 2, etc.)
+    with all videos playing simultaneously.
+    """
+    n = len(video_paths)
+    if n == 0:
+        print("No videos to combine.")
+        return
+    if n == 1:
+        print("Only one video, skipping grid creation.")
+        return
+
+    cols = math.ceil(math.sqrt(n))
+    rows = math.ceil(n / cols)
+
+    # Probe the first video for resolution
+    probe = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0",
+         "-show_entries", "stream=width,height", "-of", "csv=p=0",
+         video_paths[0]],
+        capture_output=True, text=True,
+    )
+    try:
+        src_w, src_h = [int(x) for x in probe.stdout.strip().split(",")]
+    except ValueError:
+        src_w, src_h = 1920, 1080
+    cell_w = src_w // cols
+    cell_h = src_h // rows
+    # Ensure even dimensions for libx264
+    cell_w -= cell_w % 2
+    cell_h -= cell_h % 2
+
+    print(f"\nCreating {cols}x{rows} grid video from {n} recordings ({cell_w}x{cell_h} per cell)...")
+
+    # Build ffmpeg inputs
+    inputs = []
+    for path in video_paths:
+        inputs.extend(["-i", path])
+
+    # Scale each video to cell size; pad empty slots with black
+    filter_parts = []
+    total_slots = rows * cols
+    for i in range(n):
+        filter_parts.append(f"[{i}:v]scale={cell_w}:{cell_h},setsar=1[v{i}]")
+    for i in range(n, total_slots):
+        filter_parts.append(f"color=black:s={cell_w}x{cell_h}:d=1[v{i}]")
+
+    # Build xstack layout string
+    layout_parts = []
+    for idx in range(total_slots):
+        col = idx % cols
+        row = idx // cols
+        layout_parts.append(f"{cell_w * col}_{cell_h * row}")
+
+    inputs_str = "".join(f"[v{i}]" for i in range(total_slots))
+    filter_parts.append(
+        f"{inputs_str}xstack=inputs={total_slots}:layout={'|'.join(layout_parts)}[out]"
+    )
+
+    cmd = [
+        "ffmpeg", "-y",
+        *inputs,
+        "-filter_complex", ";".join(filter_parts),
+        "-map", "[out]",
+        "-c:v", "libx264",
+        "-pix_fmt", "yuv420p",
+        "-shortest",
+        output_path,
+    ]
+
+    print(f"  Output: {output_path}")
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode == 0:
+        print("  Grid video created successfully.")
+    else:
+        print(f"  Error creating grid video:\n{result.stderr[-500:]}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Automate VS Code Jupyter Notebook creation with screen recording")
     parser.add_argument("--output-dir", default="output", help="Output directory for recordings (default: output)")
@@ -328,6 +411,12 @@ def main():
     passed = sum(1 for _, s, _ in results if s == "PASS")
     print(f"\n  {passed}/{args.n} passed")
     print(f"{'='*60}\n")
+
+    # Combine all recordings into a grid video
+    video_paths = [path for _, _, path in results if os.path.exists(path)]
+    if len(video_paths) > 1:
+        grid_path = os.path.join(args.output_dir, "grid_all_runs.mp4")
+        create_grid_video(video_paths, grid_path)
 
 
 if __name__ == "__main__":
