@@ -1,9 +1,11 @@
 """Automate VS Code Jupyter Notebook creation with screen recording."""
 
 import argparse
+from datetime import datetime
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -134,14 +136,46 @@ def select_from_quick_pick(page, text, timeout=10000):
     row.click()
 
 
+def extract_cell_execution_time(page):
+    """Extract the cell execution duration shown in the VS Code notebook UI.
+
+    VS Code displays execution time (e.g. '14.2s') near the cell after it
+    finishes running.  Returns the time in seconds, or None if not found.
+    """
+    # Try common selectors for the execution duration element
+    selectors = [
+        ".notebook-cell-execution-duration",
+        ".cell-execution-duration",
+        ".cell-status-item",
+    ]
+    for selector in selectors:
+        elements = page.locator(selector).all()
+        for el in elements:
+            try:
+                text = el.inner_text(timeout=1000).strip()
+                # Match patterns like "14.2s", "2m 3s", "1m 30.5s", "500ms"
+                m = re.match(r"(?:(\d+)m\s*)?(\d+(?:\.\d+)?)\s*s", text)
+                if m:
+                    minutes = int(m.group(1)) if m.group(1) else 0
+                    seconds = float(m.group(2))
+                    return minutes * 60 + seconds
+                m = re.match(r"(\d+(?:\.\d+)?)\s*ms", text)
+                if m:
+                    return float(m.group(1)) / 1000.0
+            except Exception:
+                continue
+    return None
+
+
 def wait_for_cell_done(page, notebook_path, timeout=300, poll_interval=5):
     """Wait for cell execution to complete by polling the saved notebook file.
 
     Periodically triggers Ctrl+S to save the notebook, then reads the .ipynb
     JSON to check if the completion marker or an error appeared in the output.
 
-    Returns a tuple (success, elapsed) where success is True/False and elapsed
-    is the execution time in seconds.
+    Returns a tuple (success, exec_time) where success is True/False and
+    exec_time is the VS Code-reported execution time in seconds (or wall-clock
+    elapsed time as a fallback).
     """
     print(f"  Waiting for cell execution to complete (up to {timeout}s)...")
     start = time.time()
@@ -157,12 +191,20 @@ def wait_for_cell_done(page, notebook_path, timeout=300, poll_interval=5):
         elapsed = time.time() - start
 
         if result is True:
-            print(f"  Cell succeeded after {elapsed:.0f}s (marker found in output).")
-            print(f"  Execution time: {elapsed:.1f}s")
-            return True, elapsed
+            # Extract the execution time from VS Code's UI
+            ui_time = extract_cell_execution_time(page)
+            if ui_time is not None:
+                print(f"  Cell succeeded (marker found). VS Code execution time: {ui_time:.1f}s")
+            else:
+                ui_time = elapsed
+                print(f"  Cell succeeded (marker found). Wall-clock time: {ui_time:.1f}s (UI time not found)")
+            return True, ui_time
         elif result is False:
-            print(f"  Cell failed after {elapsed:.0f}s (error found in output).")
-            return False, elapsed
+            ui_time = extract_cell_execution_time(page)
+            if ui_time is None:
+                ui_time = elapsed
+            print(f"  Cell failed after {ui_time:.1f}s (error found in output).")
+            return False, ui_time
         else:
             print(f"  Still running ({elapsed:.0f}s elapsed)...")
 
@@ -405,12 +447,14 @@ def main():
             ffmpeg_proc = start_recording(output_path)
             success = False
             exec_time = None
+            total_start = time.time()
             try:
                 success, exec_time = automate_vscode(page, run_number=i)
                 time.sleep(2)
             except Exception as e:
                 print(f"Error during run {i}: {e}")
             finally:
+                total_time = time.time() - total_start
                 stop_recording(ffmpeg_proc)
                 try:
                     browser.close()
@@ -418,29 +462,37 @@ def main():
                     pass
 
             status = "PASS" if success else "FAIL"
-            results.append((i, status, output_path, exec_time))
+            results.append((i, status, output_path, exec_time, total_time))
             print(f"\nRun {i}: {status} -> {output_path}")
 
-    # Print summary
+    # Print summary as tab-separated values (paste-friendly for Google Sheets)
     print(f"\n{'='*60}")
-    print("  RESULTS SUMMARY")
-    print(f"{'='*60}")
-    for run_num, status, path, exec_time in results:
-        time_str = f"  ({exec_time:.1f}s)" if exec_time is not None else ""
-        print(f"  Run {run_num}: {status}{time_str}  ->  {path}")
-
-    passed = sum(1 for _, s, _, _ in results if s == "PASS")
-    exec_times = [t for _, _, _, t in results if t is not None]
-    print(f"\n  {passed}/{args.n} passed")
-    if exec_times:
-        avg_time = sum(exec_times) / len(exec_times)
-        print(f"  Average execution time: {avg_time:.1f}s")
+    print("  RESULTS SUMMARY (tab-separated, copy/paste into Google Sheets)")
     print(f"{'='*60}\n")
+    print("Run\tStatus\tCell Execution Time (s)\tTotal Time (s)\tRecording")
+    for run_num, status, path, exec_time, total_time in results:
+        cell_str = f"{exec_time:.1f}" if exec_time is not None else "N/A"
+        total_str = f"{total_time:.1f}"
+        print(f"{run_num}\t{status}\t{cell_str}\t{total_str}\t{path}")
+
+    passed = sum(1 for _, s, _, _, _ in results if s == "PASS")
+    exec_times = [t for _, _, _, t, _ in results if t is not None]
+    total_times = [t for _, _, _, _, t in results]
+    print()
+    print(f"  {passed}/{args.n} passed")
+    if exec_times:
+        avg_exec = sum(exec_times) / len(exec_times)
+        print(f"  Average cell execution time: {avg_exec:.1f}s")
+    if total_times:
+        avg_total = sum(total_times) / len(total_times)
+        print(f"  Average total time: {avg_total:.1f}s")
+    print(f"\n{'='*60}\n")
 
     # Combine all recordings into a grid video
-    video_paths = [path for _, _, path, _ in results if os.path.exists(path)]
+    video_paths = [path for _, _, path, _, _ in results if os.path.exists(path)]
     if len(video_paths) > 1:
-        grid_path = os.path.join(args.output_dir, "grid_all_runs.mp4")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        grid_path = os.path.join(args.output_dir, f"{timestamp}_{args.n}runs.mp4")
         create_grid_video(video_paths, grid_path)
 
 
