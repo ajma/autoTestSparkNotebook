@@ -18,6 +18,21 @@ from playwright.sync_api import sync_playwright
 NOTEBOOK_SAVE_DIR = os.path.join(os.path.expanduser("~"), "spark_test_notebooks")
 DEBUG_PORT = 9222
 
+APP_CONFIGS = {
+    "vscode": {
+        "command": "code",
+        "process_name": "Code.exe",
+        "window_titles": ["Visual Studio Code", "Code"],
+        "label": "VS Code",
+    },
+    "antigravity": {
+        "command": "ag",
+        "process_name": "Antigravity.exe",
+        "window_titles": ["Antigravity"],
+        "label": "Antigravity",
+    },
+}
+
 PYSPARK_CODE = '''from pyspark.sql import SparkSession
 
 # Create a SparkSession
@@ -39,12 +54,14 @@ sampled_df.show()
 print("EXECUTION_COMPLETE_MARKER")'''
 
 
-def validate_dependencies():
+def validate_dependencies(app_config):
     missing = []
     if not shutil.which("ffmpeg"):
         missing.append("ffmpeg (install via: winget install Gyan.FFmpeg)")
-    if not shutil.which("code"):
-        missing.append("code (VS Code CLI - ensure VS Code is installed and on PATH)")
+    cmd = app_config["command"]
+    label = app_config["label"]
+    if not shutil.which(cmd):
+        missing.append(f"{cmd} ({label} CLI - ensure {label} is installed and on PATH)")
     if missing:
         print("Missing dependencies:")
         for dep in missing:
@@ -212,27 +229,31 @@ def wait_for_cell_done(page, notebook_path, timeout=300, poll_interval=5):
     return False, timeout
 
 
-def launch_vscode():
-    """Launch VS Code with Chrome DevTools Protocol enabled."""
-    print(f"Launching VS Code with --remote-debugging-port={DEBUG_PORT}...")
+def launch_app(app_config):
+    """Launch the editor app with Chrome DevTools Protocol enabled."""
+    cmd = app_config["command"]
+    label = app_config["label"]
+    print(f"Launching {label} with --remote-debugging-port={DEBUG_PORT}...")
     subprocess.Popen(
-        ["code", f"--remote-debugging-port={DEBUG_PORT}"],
+        [cmd, f"--remote-debugging-port={DEBUG_PORT}"],
         shell=True,
     )
     time.sleep(5)
 
 
-def connect_to_vscode(pw, retries=5, delay=3):
-    """Connect to VS Code via CDP. Retries if the debug port isn't ready yet."""
+def connect_to_app(pw, app_config, retries=5, delay=3):
+    """Connect to the editor app via CDP. Retries if the debug port isn't ready yet."""
+    label = app_config["label"]
+    window_titles = app_config["window_titles"]
     for attempt in range(1, retries + 1):
         try:
-            print(f"  Connecting to VS Code via CDP (attempt {attempt}/{retries})...")
+            print(f"  Connecting to {label} via CDP (attempt {attempt}/{retries})...")
             browser = pw.chromium.connect_over_cdp(f"http://localhost:{DEBUG_PORT}")
-            # Find the main VS Code editor window
+            # Find the main editor window
             for context in browser.contexts:
                 for p in context.pages:
                     title = p.title() or ""
-                    if "Visual Studio Code" in title or "Code" in title:
+                    if any(wt in title for wt in window_titles):
                         print(f"  Connected to: {title}")
                         return browser, p
             # Fallback to first page
@@ -244,7 +265,7 @@ def connect_to_vscode(pw, retries=5, delay=3):
                 print(f"  Connection failed ({e}), retrying in {delay}s...")
                 time.sleep(delay)
             else:
-                raise RuntimeError(f"Could not connect to VS Code CDP after {retries} attempts: {e}")
+                raise RuntimeError(f"Could not connect to {label} CDP after {retries} attempts: {e}")
 
 
 def automate_vscode(page, run_number=1):
@@ -332,10 +353,12 @@ def automate_vscode(page, run_number=1):
     return success, exec_time
 
 
-def close_vscode():
-    """Fully close VS Code."""
-    print("Closing VS Code...")
-    subprocess.run("taskkill /IM Code.exe /F", shell=True,
+def close_app(app_config):
+    """Fully close the editor app."""
+    label = app_config["label"]
+    process_name = app_config["process_name"]
+    print(f"Closing {label}...")
+    subprocess.run(f"taskkill /IM {process_name} /F", shell=True,
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(3)
 
@@ -421,12 +444,15 @@ def create_grid_video(video_paths, output_path):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Automate VS Code Jupyter Notebook creation with screen recording")
+    parser = argparse.ArgumentParser(description="Automate VS Code / Antigravity Jupyter Notebook creation with screen recording")
     parser.add_argument("--output-dir", default="output", help="Output directory for recordings (default: output)")
     parser.add_argument("-n", type=int, default=1, help="Number of times to run the automation (default: 1)")
+    parser.add_argument("--app", choices=["vscode", "antigravity"], default="vscode",
+                        help="Which editor to automate (default: vscode)")
     args = parser.parse_args()
 
-    validate_dependencies()
+    app_config = APP_CONFIGS[args.app]
+    validate_dependencies(app_config)
     os.makedirs(args.output_dir, exist_ok=True)
 
     results = []
@@ -434,15 +460,15 @@ def main():
     with sync_playwright() as pw:
         for i in range(1, args.n + 1):
             print(f"\n{'='*60}")
-            print(f"  Run {i} of {args.n}")
+            print(f"  Run {i} of {args.n} ({app_config['label']})")
             print(f"{'='*60}\n")
 
             output_path = os.path.join(args.output_dir, f"recording_{i}.mp4")
 
-            # Ensure clean state: kill any existing VS Code, then launch with CDP
-            close_vscode()
-            launch_vscode()
-            browser, page = connect_to_vscode(pw)
+            # Ensure clean state: kill any existing instance, then launch with CDP
+            close_app(app_config)
+            launch_app(app_config)
+            browser, page = connect_to_app(pw, app_config)
 
             ffmpeg_proc = start_recording(output_path)
             success = False
