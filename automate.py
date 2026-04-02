@@ -13,6 +13,10 @@ import sys
 import threading
 import time
 
+import gspread
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
+from google_auth_oauthlib.flow import InstalledAppFlow
 import pyautogui
 import pyperclip
 from playwright.sync_api import sync_playwright
@@ -389,6 +393,66 @@ def allow_sleep():
     print("Sleep prevention disabled.")
 
 
+GSHEETS_SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
+GSHEETS_TOKEN_PATH = os.path.join(os.path.dirname(__file__), "token.json")
+GSHEETS_CREDS_PATH = os.path.join(os.path.dirname(__file__), "credentials.json")
+
+
+def gsheets_login():
+    """Interactive OAuth login flow. Saves token.json for future use."""
+    if not os.path.exists(GSHEETS_CREDS_PATH):
+        print(f"ERROR: {GSHEETS_CREDS_PATH} not found.")
+        print("Download OAuth client credentials from Google Cloud Console")
+        print("and save as credentials.json in the project directory.")
+        sys.exit(1)
+    flow = InstalledAppFlow.from_client_secrets_file(GSHEETS_CREDS_PATH, GSHEETS_SCOPES)
+    creds = flow.run_local_server(port=0)
+    with open(GSHEETS_TOKEN_PATH, "w") as f:
+        f.write(creds.to_json())
+    print(f"Login successful. Token saved to {GSHEETS_TOKEN_PATH}")
+
+
+def get_gsheets_client():
+    """Return a gspread client using a saved token. Does not trigger interactive login."""
+    if not os.path.exists(GSHEETS_TOKEN_PATH):
+        return None
+    creds = Credentials.from_authorized_user_file(GSHEETS_TOKEN_PATH, GSHEETS_SCOPES)
+    if creds.expired and creds.refresh_token:
+        creds.refresh(Request())
+        with open(GSHEETS_TOKEN_PATH, "w") as f:
+            f.write(creds.to_json())
+    if not creds.valid:
+        return None
+    return gspread.authorize(creds)
+
+
+def validate_gsheets_token():
+    """Check that a valid Google Sheets token exists. Exit if not."""
+    client = get_gsheets_client()
+    if client is None:
+        print("ERROR: No valid Google Sheets token found.")
+        print("Run 'python automate.py login' first to authenticate.")
+        sys.exit(1)
+    print("Google Sheets token is valid.")
+
+
+def append_to_google_sheet(sheet_id, row_data):
+    """Append a single row to the first worksheet of the given Google Sheet."""
+    try:
+        client = get_gsheets_client()
+        if client is None:
+            return
+        sheet = client.open_by_key(sheet_id)
+        worksheet = sheet.sheet1
+        # Add header if sheet is empty
+        if worksheet.row_count == 0 or not worksheet.cell(1, 1).value:
+            worksheet.append_row(["Date", "Time", "IDE", "Status",
+                                  "Cell Execution Time (s)", "Total Time (s)", "Recording"])
+        worksheet.append_row(row_data)
+    except Exception as e:
+        print(f"  Warning: failed to write to Google Sheet: {e}")
+
+
 def create_grid_video(video_paths, output_path):
     """Combine multiple videos into a single grid video using ffmpeg.
 
@@ -471,16 +535,38 @@ def create_grid_video(video_paths, output_path):
 
 def main():
     parser = argparse.ArgumentParser(description="Automate VS Code / Antigravity Jupyter Notebook creation with screen recording")
-    parser.add_argument("--output-dir", default="output", help="Output directory for recordings (default: output)")
-    parser.add_argument("-n", type=int, default=1, help="Number of times to run the automation (default: 1)")
-    parser.add_argument("--loop", action="store_true",
-                        help="Run forever, building a grid video every 9 runs")
-    parser.add_argument("--app", choices=["vscode", "antigravity"], default="vscode",
-                        help="Which editor to automate (default: vscode)")
+    subparsers = parser.add_subparsers(dest="command")
+
+    # Login subcommand
+    subparsers.add_parser("login", help="Authenticate with Google Sheets (interactive OAuth login)")
+
+    # Run subcommand (default)
+    run_parser = subparsers.add_parser("run", help="Run the automation (default)")
+    run_parser.add_argument("--output-dir", default="output", help="Output directory for recordings (default: output)")
+    run_parser.add_argument("-n", type=int, default=1, help="Number of times to run the automation (default: 1)")
+    run_parser.add_argument("--loop", action="store_true",
+                            help="Run forever, building a grid video every 9 runs")
+    run_parser.add_argument("--app", choices=["vscode", "antigravity"], default="vscode",
+                            help="Which editor to automate (default: vscode)")
+    run_parser.add_argument("--sheet-id", default=None,
+                            help="Google Sheet ID to append results to (optional)")
+
     args = parser.parse_args()
+
+    # Default to "run" if no subcommand given
+    if args.command is None:
+        args = run_parser.parse_args()
+        args.command = "run"
+
+    if args.command == "login":
+        gsheets_login()
+        return
 
     app_config = APP_CONFIGS[args.app]
     validate_dependencies(app_config)
+
+    if args.sheet_id:
+        validate_gsheets_token()
     os.makedirs(args.output_dir, exist_ok=True)
 
     results = []
@@ -563,6 +649,12 @@ def main():
             if write_header:
                 f.write(history_header + "\n")
             f.write(f"{run_start_date}\t{run_start_time}\t{ide_label}\t{status}\t{cell_str}\t{total_str}\t{output_path}\n")
+
+        # Append to Google Sheet if configured
+        if args.sheet_id:
+            append_to_google_sheet(args.sheet_id, [
+                run_start_date, run_start_time, ide_label, status, cell_str, total_str, output_path
+            ])
 
         return result
 

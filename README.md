@@ -1,0 +1,114 @@
+# automateSpark2
+
+Automated testing of PySpark notebook execution in VS Code and Antigravity (a VS Code fork). Launches the IDE, creates a Jupyter notebook, connects to a remote Spark kernel, runs PySpark code, and records the screen -- all unattended.
+
+## Prerequisites
+
+- **Python 3.10+**
+- **ffmpeg** -- `winget install Gyan.FFmpeg`
+- **VS Code** and/or **Antigravity** on PATH (`code` / `antigravity`)
+- **Playwright** -- `pip install playwright && playwright install chromium`
+
+Install Python dependencies:
+
+```bash
+pip install pyautogui pyperclip playwright gspread google-auth google-auth-oauthlib
+```
+
+## Usage
+
+### Basic run (VS Code, single iteration)
+
+```bash
+python automate.py run
+```
+
+### Run with Antigravity, 9 iterations
+
+```bash
+python automate.py run --app antigravity -n 9
+```
+
+### Loop forever (grid video every 9 runs)
+
+```bash
+python automate.py run --app antigravity --loop
+```
+
+Press `Ctrl+C` to stop gracefully. A summary of any remaining runs in the current batch is printed on exit.
+
+### All options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--app {vscode,antigravity}` | `vscode` | Which IDE to automate |
+| `-n N` | `1` | Number of runs |
+| `--loop` | off | Run forever, building a grid video every 9 runs |
+| `--output-dir DIR` | `output` | Output directory for recordings and history |
+| `--sheet-id ID` | none | Google Sheet ID to append results to |
+
+The `run` subcommand is the default -- you can omit it and flags work the same way.
+
+## What it does
+
+1. Kills any existing IDE instance and launches a fresh one with `--remote-debugging-port=9222`
+2. Connects via Chrome DevTools Protocol using Playwright
+3. Creates a new Jupyter notebook via the command palette
+4. Pastes PySpark sample code into the cell
+5. Saves the notebook to a known path
+6. Opens the kernel picker, selects Remote Spark Kernel
+7. Waits for the kernel to connect
+8. Runs all cells
+9. Polls the saved `.ipynb` file for a completion marker or error
+10. Records the screen throughout via ffmpeg
+
+Each run produces a screen recording. After a batch completes (or every 9 runs in `--loop` mode), recordings are combined into a 3x3 grid video.
+
+## Output
+
+Recordings are organized into date-based folders:
+
+```
+output/
+  history.txt
+  2026-04-01/
+    recording_1.mp4
+    recording_2.mp4
+    ...
+    20260401_152732_antigravity_9runs.mp4
+  2026-04-02/
+    ...
+```
+
+### Results history
+
+After each run, a tab-separated row is appended to `output/history.txt`:
+
+```
+Date    Time    IDE    Status    Cell Execution Time (s)    Total Time (s)    Recording
+```
+
+This file is designed to be copy-pasted directly into Google Sheets.
+
+### Google Sheets integration
+
+To also push results to a Google Sheet in real time:
+
+1. Go to [Google Cloud Console > Credentials](https://console.cloud.google.com/apis/credentials)
+2. Create an **OAuth 2.0 Client ID** (application type: Desktop)
+3. Download the JSON and save it as `credentials.json` in the project root
+4. Enable the **Google Sheets API** in your project
+5. Run the login command once (opens a browser for Google login):
+   ```bash
+   python automate.py login
+   ```
+6. Run with `--sheet-id YOUR_SHEET_ID`:
+   ```bash
+   python automate.py run --app antigravity --loop --sheet-id YOUR_SHEET_ID
+   ```
+
+The token is cached in `token.json` and refreshed automatically. If the token is missing or invalid when `--sheet-id` is used, the script will exit with an error prompting you to run `login` again. Both `credentials.json` and `token.json` are gitignored.
+
+## Sleep prevention
+
+The script uses the Windows `SetThreadExecutionState` API to prevent the laptop from sleeping or turning off the display during automation. Normal sleep behavior is restored when the script exits.
