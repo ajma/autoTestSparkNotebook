@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 
 import pyautogui
@@ -363,6 +364,30 @@ def close_app(app_config):
     time.sleep(3)
 
 
+def start_mouse_jiggler(interval=60):
+    """Start a background thread that jiggles the mouse to prevent sleep."""
+    stop_event = threading.Event()
+
+    def _jiggle():
+        while not stop_event.is_set():
+            stop_event.wait(interval)
+            if not stop_event.is_set():
+                x, y = pyautogui.position()
+                pyautogui.moveRel(1, 0, duration=0.05)
+                pyautogui.moveRel(-1, 0, duration=0.05)
+
+    thread = threading.Thread(target=_jiggle, daemon=True)
+    thread.start()
+    print(f"Mouse jiggler started (every {interval}s).")
+    return stop_event
+
+
+def stop_mouse_jiggler(stop_event):
+    """Stop the mouse jiggler thread."""
+    stop_event.set()
+    print("Mouse jiggler stopped.")
+
+
 def create_grid_video(video_paths, output_path):
     """Combine multiple videos into a single grid video using ffmpeg.
 
@@ -456,6 +481,7 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
 
     results = []
+    jiggler_stop = start_mouse_jiggler(interval=60)
 
     with sync_playwright() as pw:
         for i in range(1, args.n + 1):
@@ -490,6 +516,10 @@ def main():
             status = "PASS" if success else "FAIL"
             results.append((i, status, output_path, exec_time, total_time))
             print(f"\nRun {i}: {status} -> {output_path}")
+
+    # Close the IDE after the last run
+    close_app(app_config)
+    stop_mouse_jiggler(jiggler_stop)
 
     # Print summary as tab-separated values (paste-friendly for Google Sheets)
     print(f"\n{'='*60}")
