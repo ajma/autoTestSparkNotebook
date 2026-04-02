@@ -17,6 +17,7 @@ import gspread
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
+from gspread.utils import InsertDataOption
 import pyautogui
 import pyperclip
 from playwright.sync_api import sync_playwright
@@ -448,7 +449,7 @@ def append_to_google_sheet(sheet_id, row_data):
         if worksheet.row_count == 0 or not worksheet.cell(1, 1).value:
             worksheet.append_row(["Date", "Time", "IDE", "Status",
                                   "Cell Execution Time (s)", "Total Time (s)", "Recording"])
-        worksheet.append_row(row_data)
+        worksheet.append_row(row_data, insert_data_option=InsertDataOption.insert_rows)
     except Exception as e:
         print(f"  Warning: failed to write to Google Sheet: {e}")
 
@@ -612,7 +613,7 @@ def main():
         """Execute a single automation run. Returns a result tuple."""
         date_dir = os.path.join(args.output_dir, datetime.now().strftime("%Y-%m-%d"))
         os.makedirs(date_dir, exist_ok=True)
-        output_path = os.path.join(date_dir, f"recording_{run_number}.mp4")
+        output_path = os.path.join(date_dir, f"recording_{datetime.now().strftime('%H%M%S')}.mp4")
 
         close_app(app_config)
         launch_app(app_config)
