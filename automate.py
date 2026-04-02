@@ -1,6 +1,7 @@
 """Automate VS Code Jupyter Notebook creation with screen recording."""
 
 import argparse
+import ctypes
 from datetime import datetime
 import json
 import math
@@ -316,10 +317,15 @@ def automate_vscode(page, run_number=1):
     run_command_palette(page, "Notebook: Select Notebook Kernel")
     time.sleep(1)
 
-    # Step 5: Select "Select Another Kernel"
-    print("Selecting 'Select Another Kernel'...")
-    select_from_quick_pick(page, "Select Another Kernel")
-    time.sleep(1)
+    # Step 5: Select "Select Another Kernel" (if present)
+    rows = page.locator(".quick-input-list .monaco-list-row").all()
+    options = [row.inner_text(timeout=2000) for row in rows]
+    if any("Select Another Kernel" in opt for opt in options):
+        print("Selecting 'Select Another Kernel'...")
+        select_from_quick_pick(page, "Select Another Kernel")
+        time.sleep(1)
+    else:
+        print("'Select Another Kernel' not found, skipping step 5.")
 
     # Step 6: Select "Remote Spark Kernel"
     print("Selecting 'Remote Spark Kernel'...")
@@ -364,28 +370,23 @@ def close_app(app_config):
     time.sleep(3)
 
 
-def start_mouse_jiggler(interval=60):
-    """Start a background thread that jiggles the mouse to prevent sleep."""
-    stop_event = threading.Event()
-
-    def _jiggle():
-        while not stop_event.is_set():
-            stop_event.wait(interval)
-            if not stop_event.is_set():
-                x, y = pyautogui.position()
-                pyautogui.moveRel(1, 0, duration=0.05)
-                pyautogui.moveRel(-1, 0, duration=0.05)
-
-    thread = threading.Thread(target=_jiggle, daemon=True)
-    thread.start()
-    print(f"Mouse jiggler started (every {interval}s).")
-    return stop_event
+ES_CONTINUOUS = 0x80000000
+ES_SYSTEM_REQUIRED = 0x00000001
+ES_DISPLAY_REQUIRED = 0x00000002
 
 
-def stop_mouse_jiggler(stop_event):
-    """Stop the mouse jiggler thread."""
-    stop_event.set()
-    print("Mouse jiggler stopped.")
+def prevent_sleep():
+    """Tell Windows to stay awake (prevent sleep and display off)."""
+    ctypes.windll.kernel32.SetThreadExecutionState(
+        ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED
+    )
+    print("Sleep prevention enabled.")
+
+
+def allow_sleep():
+    """Restore normal Windows sleep behavior."""
+    ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
+    print("Sleep prevention disabled.")
 
 
 def create_grid_video(video_paths, output_path):
@@ -481,7 +482,7 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
 
     results = []
-    jiggler_stop = start_mouse_jiggler(interval=60)
+    prevent_sleep()
 
     with sync_playwright() as pw:
         for i in range(1, args.n + 1):
@@ -489,7 +490,9 @@ def main():
             print(f"  Run {i} of {args.n} ({app_config['label']})")
             print(f"{'='*60}\n")
 
-            output_path = os.path.join(args.output_dir, f"recording_{i}.mp4")
+            date_dir = os.path.join(args.output_dir, datetime.now().strftime("%Y-%m-%d"))
+            os.makedirs(date_dir, exist_ok=True)
+            output_path = os.path.join(date_dir, f"recording_{i}.mp4")
 
             # Ensure clean state: kill any existing instance, then launch with CDP
             close_app(app_config)
@@ -520,7 +523,7 @@ def main():
 
     # Close the IDE after the last run
     close_app(app_config)
-    stop_mouse_jiggler(jiggler_stop)
+    allow_sleep()
 
     # Print summary as tab-separated values (paste-friendly for Google Sheets)
     ide_label = app_config["label"]
@@ -566,7 +569,9 @@ def main():
     video_paths = [path for _, _, path, _, _, _ in results if os.path.exists(path)]
     if len(video_paths) > 1:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        grid_path = os.path.join(args.output_dir, f"{timestamp}_{args.app}_{args.n}runs.mp4")
+        grid_dir = os.path.join(args.output_dir, datetime.now().strftime("%Y-%m-%d"))
+        os.makedirs(grid_dir, exist_ok=True)
+        grid_path = os.path.join(grid_dir, f"{timestamp}_{args.app}_{args.n}runs.mp4")
         create_grid_video(video_paths, grid_path)
 
 
