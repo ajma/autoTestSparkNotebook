@@ -473,6 +473,8 @@ def main():
     parser = argparse.ArgumentParser(description="Automate VS Code / Antigravity Jupyter Notebook creation with screen recording")
     parser.add_argument("--output-dir", default="output", help="Output directory for recordings (default: output)")
     parser.add_argument("-n", type=int, default=1, help="Number of times to run the automation (default: 1)")
+    parser.add_argument("--loop", action="store_true",
+                        help="Run forever, building a grid video every 9 runs")
     parser.add_argument("--app", choices=["vscode", "antigravity"], default="vscode",
                         help="Which editor to automate (default: vscode)")
     args = parser.parse_args()
@@ -484,95 +486,128 @@ def main():
     results = []
     prevent_sleep()
 
-    with sync_playwright() as pw:
-        for i in range(1, args.n + 1):
-            print(f"\n{'='*60}")
-            print(f"  Run {i} of {args.n} ({app_config['label']})")
-            print(f"{'='*60}\n")
+    ide_label = app_config["label"]
+    history_header = "Date\tTime\tIDE\tStatus\tCell Execution Time (s)\tTotal Time (s)\tRecording"
+    history_path = os.path.join(args.output_dir, "history.txt")
 
-            date_dir = os.path.join(args.output_dir, datetime.now().strftime("%Y-%m-%d"))
-            os.makedirs(date_dir, exist_ok=True)
-            output_path = os.path.join(date_dir, f"recording_{i}.mp4")
+    def print_summary(batch_results):
+        """Print a summary table for a batch of results."""
+        header = "Date\tTime\tIDE\tStatus\tCell Execution Time (s)\tTotal Time (s)\tRecording"
+        print(f"\n{'='*60}")
+        print("  RESULTS SUMMARY (tab-separated, copy/paste into Google Sheets)")
+        print(f"{'='*60}\n")
+        print(header)
+        for status, path, exec_time, total_time, start_date, start_time in batch_results:
+            cell_str = f"{exec_time:.1f}" if exec_time is not None else "N/A"
+            total_str = f"{total_time:.1f}"
+            print(f"{start_date}\t{start_time}\t{ide_label}\t{status}\t{cell_str}\t{total_str}\t{path}")
+        passed = sum(1 for s, _, _, _, _, _ in batch_results if s == "PASS")
+        exec_times = [t for _, _, t, _, _, _ in batch_results if t is not None]
+        total_times = [t for _, _, _, t, _, _ in batch_results]
+        print()
+        print(f"  {passed}/{len(batch_results)} passed")
+        if exec_times:
+            print(f"  Average cell execution time: {sum(exec_times) / len(exec_times):.1f}s")
+        if total_times:
+            print(f"  Average total time: {sum(total_times) / len(total_times):.1f}s")
+        print(f"\n{'='*60}\n")
 
-            # Ensure clean state: kill any existing instance, then launch with CDP
-            close_app(app_config)
-            launch_app(app_config)
-            browser, page = connect_to_app(pw, app_config)
+    def build_grid_video(batch_results, app_name):
+        """Create a grid video from a batch of results."""
+        video_paths = [path for _, path, _, _, _, _ in batch_results if os.path.exists(path)]
+        if len(video_paths) > 1:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            grid_dir = os.path.join(args.output_dir, datetime.now().strftime("%Y-%m-%d"))
+            os.makedirs(grid_dir, exist_ok=True)
+            grid_path = os.path.join(grid_dir, f"{timestamp}_{app_name}_{len(video_paths)}runs.mp4")
+            create_grid_video(video_paths, grid_path)
 
-            ffmpeg_proc = start_recording(output_path)
-            success = False
-            exec_time = None
-            run_start_dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            total_start = time.time()
+    def run_once(pw, run_number):
+        """Execute a single automation run. Returns a result tuple."""
+        date_dir = os.path.join(args.output_dir, datetime.now().strftime("%Y-%m-%d"))
+        os.makedirs(date_dir, exist_ok=True)
+        output_path = os.path.join(date_dir, f"recording_{run_number}.mp4")
+
+        close_app(app_config)
+        launch_app(app_config)
+        browser, page = connect_to_app(pw, app_config)
+
+        ffmpeg_proc = start_recording(output_path)
+        success = False
+        exec_time = None
+        run_start_date = datetime.now().strftime("%Y-%m-%d")
+        run_start_time = datetime.now().strftime("%H:%M:%S")
+        total_start = time.time()
+        try:
+            success, exec_time = automate_vscode(page, run_number=run_number)
+            time.sleep(2)
+        except Exception as e:
+            print(f"Error during run {run_number}: {e}")
+        finally:
+            total_time = time.time() - total_start
+            stop_recording(ffmpeg_proc)
             try:
-                success, exec_time = automate_vscode(page, run_number=i)
-                time.sleep(2)
-            except Exception as e:
-                print(f"Error during run {i}: {e}")
-            finally:
-                total_time = time.time() - total_start
-                stop_recording(ffmpeg_proc)
-                try:
-                    browser.close()
-                except Exception:
-                    pass
+                browser.close()
+            except Exception:
+                pass
 
-            status = "PASS" if success else "FAIL"
-            results.append((i, status, output_path, exec_time, total_time, run_start_dt))
-            print(f"\nRun {i}: {status} -> {output_path}")
+        status = "PASS" if success else "FAIL"
+        result = (status, output_path, exec_time, total_time, run_start_date, run_start_time)
+        print(f"\nRun {run_number}: {status} -> {output_path}")
+
+        # Append to history file immediately
+        cell_str = f"{exec_time:.1f}" if exec_time is not None else "N/A"
+        total_str = f"{total_time:.1f}"
+        write_header = not os.path.exists(history_path)
+        with open(history_path, "a", encoding="utf-8") as f:
+            if write_header:
+                f.write(history_header + "\n")
+            f.write(f"{run_start_date}\t{run_start_time}\t{ide_label}\t{status}\t{cell_str}\t{total_str}\t{output_path}\n")
+
+        return result
+
+    try:
+        with sync_playwright() as pw:
+            if args.loop:
+                batch = []
+                run_number = 1
+                while True:
+                    print(f"\n{'='*60}")
+                    print(f"  Run {run_number} (loop mode, {app_config['label']})")
+                    print(f"{'='*60}\n")
+
+                    result = run_once(pw, run_number)
+                    results.append(result)
+                    batch.append(result)
+
+                    if len(batch) == 9:
+                        print_summary(batch)
+                        build_grid_video(batch, args.app)
+                        batch = []
+
+                    run_number += 1
+            else:
+                for i in range(1, args.n + 1):
+                    print(f"\n{'='*60}")
+                    print(f"  Run {i} of {args.n} ({app_config['label']})")
+                    print(f"{'='*60}\n")
+
+                    result = run_once(pw, i)
+                    results.append(result)
+
+                print_summary(results)
+                build_grid_video(results, args.app)
+    except KeyboardInterrupt:
+        print("\n\nInterrupted by user.")
+        if results:
+            # Print summary of whatever we completed
+            remaining = results[len(results) - len(results) % 9:] if args.loop else results
+            if remaining:
+                print_summary(remaining)
 
     # Close the IDE after the last run
     close_app(app_config)
     allow_sleep()
-
-    # Print summary as tab-separated values (paste-friendly for Google Sheets)
-    ide_label = app_config["label"]
-    header = "Start DateTime\tIDE\tRun\tStatus\tCell Execution Time (s)\tTotal Time (s)\tRecording"
-
-    print(f"\n{'='*60}")
-    print("  RESULTS SUMMARY (tab-separated, copy/paste into Google Sheets)")
-    print(f"{'='*60}\n")
-    print(header)
-
-    summary_lines = []
-    for run_num, status, path, exec_time, total_time, run_start_dt in results:
-        cell_str = f"{exec_time:.1f}" if exec_time is not None else "N/A"
-        total_str = f"{total_time:.1f}"
-        line = f"{run_start_dt}\t{ide_label}\t{run_num}\t{status}\t{cell_str}\t{total_str}\t{path}"
-        print(line)
-        summary_lines.append(line)
-
-    passed = sum(1 for _, s, _, _, _, _ in results if s == "PASS")
-    exec_times = [t for _, _, _, t, _, _ in results if t is not None]
-    total_times = [t for _, _, _, _, t, _ in results]
-    print()
-    print(f"  {passed}/{args.n} passed")
-    if exec_times:
-        avg_exec = sum(exec_times) / len(exec_times)
-        print(f"  Average cell execution time: {avg_exec:.1f}s")
-    if total_times:
-        avg_total = sum(total_times) / len(total_times)
-        print(f"  Average total time: {avg_total:.1f}s")
-    print(f"\n{'='*60}\n")
-
-    # Append results to history file
-    history_path = os.path.join(args.output_dir, "history.txt")
-    write_header = not os.path.exists(history_path)
-    with open(history_path, "a", encoding="utf-8") as f:
-        if write_header:
-            f.write(header + "\n")
-        for line in summary_lines:
-            f.write(line + "\n")
-    print(f"  Results appended to {history_path}")
-
-    # Combine all recordings into a grid video
-    video_paths = [path for _, _, path, _, _, _ in results if os.path.exists(path)]
-    if len(video_paths) > 1:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        grid_dir = os.path.join(args.output_dir, datetime.now().strftime("%Y-%m-%d"))
-        os.makedirs(grid_dir, exist_ok=True)
-        grid_path = os.path.join(grid_dir, f"{timestamp}_{args.app}_{args.n}runs.mp4")
-        create_grid_video(video_paths, grid_path)
 
 
 if __name__ == "__main__":
