@@ -27,7 +27,7 @@ APP_CONFIGS = {
         "label": "VS Code",
     },
     "antigravity": {
-        "command": "ag",
+        "command": "antigravity",
         "process_name": "Antigravity.exe",
         "window_titles": ["Antigravity"],
         "label": "Antigravity",
@@ -499,6 +499,7 @@ def main():
             ffmpeg_proc = start_recording(output_path)
             success = False
             exec_time = None
+            run_start_dt = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             total_start = time.time()
             try:
                 success, exec_time = automate_vscode(page, run_number=i)
@@ -514,7 +515,7 @@ def main():
                     pass
 
             status = "PASS" if success else "FAIL"
-            results.append((i, status, output_path, exec_time, total_time))
+            results.append((i, status, output_path, exec_time, total_time, run_start_dt))
             print(f"\nRun {i}: {status} -> {output_path}")
 
     # Close the IDE after the last run
@@ -522,18 +523,25 @@ def main():
     stop_mouse_jiggler(jiggler_stop)
 
     # Print summary as tab-separated values (paste-friendly for Google Sheets)
+    ide_label = app_config["label"]
+    header = "Start DateTime\tIDE\tRun\tStatus\tCell Execution Time (s)\tTotal Time (s)\tRecording"
+
     print(f"\n{'='*60}")
     print("  RESULTS SUMMARY (tab-separated, copy/paste into Google Sheets)")
     print(f"{'='*60}\n")
-    print("Run\tStatus\tCell Execution Time (s)\tTotal Time (s)\tRecording")
-    for run_num, status, path, exec_time, total_time in results:
+    print(header)
+
+    summary_lines = []
+    for run_num, status, path, exec_time, total_time, run_start_dt in results:
         cell_str = f"{exec_time:.1f}" if exec_time is not None else "N/A"
         total_str = f"{total_time:.1f}"
-        print(f"{run_num}\t{status}\t{cell_str}\t{total_str}\t{path}")
+        line = f"{run_start_dt}\t{ide_label}\t{run_num}\t{status}\t{cell_str}\t{total_str}\t{path}"
+        print(line)
+        summary_lines.append(line)
 
-    passed = sum(1 for _, s, _, _, _ in results if s == "PASS")
-    exec_times = [t for _, _, _, t, _ in results if t is not None]
-    total_times = [t for _, _, _, _, t in results]
+    passed = sum(1 for _, s, _, _, _, _ in results if s == "PASS")
+    exec_times = [t for _, _, _, t, _, _ in results if t is not None]
+    total_times = [t for _, _, _, _, t, _ in results]
     print()
     print(f"  {passed}/{args.n} passed")
     if exec_times:
@@ -544,11 +552,21 @@ def main():
         print(f"  Average total time: {avg_total:.1f}s")
     print(f"\n{'='*60}\n")
 
+    # Append results to history file
+    history_path = os.path.join(args.output_dir, "history.txt")
+    write_header = not os.path.exists(history_path)
+    with open(history_path, "a", encoding="utf-8") as f:
+        if write_header:
+            f.write(header + "\n")
+        for line in summary_lines:
+            f.write(line + "\n")
+    print(f"  Results appended to {history_path}")
+
     # Combine all recordings into a grid video
-    video_paths = [path for _, _, path, _, _ in results if os.path.exists(path)]
+    video_paths = [path for _, _, path, _, _, _ in results if os.path.exists(path)]
     if len(video_paths) > 1:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        grid_path = os.path.join(args.output_dir, f"{timestamp}_{args.n}runs.mp4")
+        grid_path = os.path.join(args.output_dir, f"{timestamp}_{args.app}_{args.n}runs.mp4")
         create_grid_video(video_paths, grid_path)
 
 
