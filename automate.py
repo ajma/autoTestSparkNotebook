@@ -160,6 +160,30 @@ def select_from_quick_pick(page, text, timeout=10000):
     row.click()
 
 
+def capture_jupyter_server_log(page, log_path):
+    """Open the Output panel, select the Jupyter Server log channel, and save its contents."""
+    # Use command palette to open the Jupyter Server output channel directly
+    run_command_palette(page, "Output: Show Output Channels...")
+    time.sleep(0.5)
+    select_from_quick_pick(page, "Jupyter Server")
+    time.sleep(1)
+
+    # Select all text in the output panel and copy it
+    page.keyboard.press("Control+A")
+    time.sleep(0.3)
+    page.keyboard.press("Control+C")
+    time.sleep(0.5)
+
+    log_text = pyperclip.paste()
+    if log_text and log_text.strip():
+        os.makedirs(os.path.dirname(log_path), exist_ok=True)
+        with open(log_path, "w", encoding="utf-8") as f:
+            f.write(log_text)
+        print(f"  Jupyter Server log saved to {log_path}")
+    else:
+        print("  Warning: Jupyter Server log was empty.")
+
+
 def extract_cell_execution_time(page):
     """Extract the cell execution duration shown in the VS Code notebook UI.
 
@@ -632,6 +656,12 @@ def main():
             print(f"Error during run {run_number}: {e}")
         finally:
             total_time = time.time() - total_start
+            if not success:
+                log_path = output_path.replace(".mp4", "_jupyter_server.log")
+                try:
+                    capture_jupyter_server_log(page, log_path)
+                except Exception as e:
+                    print(f"  Warning: failed to capture log: {e}")
             stop_recording(ffmpeg_proc)
             try:
                 browser.close()
