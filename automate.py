@@ -441,14 +441,17 @@ def get_gsheets_client():
     """Return a gspread client using a saved token. Does not trigger interactive login."""
     if not os.path.exists(GSHEETS_TOKEN_PATH):
         return None
-    creds = Credentials.from_authorized_user_file(GSHEETS_TOKEN_PATH, GSHEETS_SCOPES)
-    if creds.expired and creds.refresh_token:
-        creds.refresh(Request())
-        with open(GSHEETS_TOKEN_PATH, "w") as f:
-            f.write(creds.to_json())
-    if not creds.valid:
+    try:
+        creds = Credentials.from_authorized_user_file(GSHEETS_TOKEN_PATH, GSHEETS_SCOPES)
+        if creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+            with open(GSHEETS_TOKEN_PATH, "w") as f:
+                f.write(creds.to_json())
+        if not creds.valid:
+            return None
+        return gspread.authorize(creds)
+    except Exception:
         return None
-    return gspread.authorize(creds)
 
 
 def validate_gsheets_token():
