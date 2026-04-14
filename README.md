@@ -1,18 +1,18 @@
-# automateSpark2
+# autoTestSparkNotebook
 
-Automated testing of PySpark notebook execution in VS Code and Antigravity (a VS Code fork). Launches the IDE, creates a Jupyter notebook, connects to a remote Spark kernel, runs PySpark code, and records the screen -- all unattended.
+Automated testing of PySpark notebook execution via the Data Cloud Extension in VS Code and Antigravity (a VS Code fork). Launches the IDE, creates a Jupyter notebook, connects to a remote Spark kernel provided by Data Cloud Extension, runs PySpark code, and records the screen -- all unattended.
 
 ## Prerequisites
 
 - **Python 3.10+**
 - **ffmpeg** -- `winget install Gyan.FFmpeg`
-- **VS Code** and/or **Antigravity** on PATH (`code` / `antigravity`)
+- **VS Code** and/or **Antigravity** on PATH (`code` / `antigravity`), with the **Data Cloud Extension** installed
 - **Playwright** -- `pip install playwright && playwright install chromium`
 
 Install Python dependencies:
 
 ```bash
-pip install pyautogui pyperclip playwright gspread google-auth google-auth-oauthlib
+pip install pyautogui pyperclip playwright gspread google-auth google-auth-oauthlib google-genai
 ```
 
 ## Usage
@@ -54,7 +54,7 @@ The `run` subcommand is the default -- you can omit it and flags work the same w
 3. Creates a new Jupyter notebook via the command palette
 4. Pastes PySpark sample code into the cell
 5. Saves the notebook to a known path
-6. Opens the kernel picker, selects Remote Spark Kernel
+6. Opens the kernel picker, selects the Remote Spark Kernel (provided by Data Cloud Extension)
 7. Waits for the kernel to connect
 8. Runs all cells
 9. Polls the saved `.ipynb` file for a completion marker or error
