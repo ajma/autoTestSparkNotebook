@@ -26,6 +26,30 @@ from playwright.sync_api import sync_playwright
 
 NOTEBOOK_SAVE_DIR = os.path.join(os.path.expanduser("~"), "spark_test_notebooks")
 
+BANNER = """
+  \033[91m  _____                  _  \033[93m_______        _   \033[0m
+  \033[91m / ____|                | |\033[93m|__   __|      | |  \033[0m
+  \033[38;5;208m| (___  _ __   __ _ _ __| | _\033[93m| | ___  ___| |_ \033[0m
+  \033[33m \\___ \\| '_ \\ / _` | '__| |/ /\033[93m |/ _ \\/ __| __|\033[0m
+  \033[32m ____) | |_) | (_| | |  |   <\033[96m| |  __/\\__ \\ |_ \033[0m
+  \033[36m|_____/| .__/ \\__,_|_|  |_|\\_\\\033[94m_|\\___||___/\\__|\033[0m
+  \033[34m       | |\033[0m
+  \033[35m       |_|\033[0m
+
+  \033[96mData Cloud Extension\033[0m \033[2m· Unattended Mode\033[0m
+"""
+
+# ANSI color codes
+RST = "\033[0m"
+BOLD = "\033[1m"
+DIM = "\033[2m"
+RED = "\033[91m"
+GRN = "\033[92m"
+YEL = "\033[93m"
+BLU = "\033[94m"
+MAG = "\033[95m"
+CYN = "\033[96m"
+
 # Event that signals "stop after the current run finishes"
 stop_after_current_run = threading.Event()
 
@@ -36,7 +60,7 @@ def _esc_listener():
         if msvcrt.kbhit():
             key = msvcrt.getch()
             if key == b'\x1b':  # ESC
-                print("\n>>> ESC pressed — will stop after the current run finishes. <<<")
+                print(f"\n{BOLD}{YEL}>>> ESC pressed — will stop after the current run finishes. <<<{RST}")
                 stop_after_current_run.set()
                 return
         time.sleep(0.1)
@@ -88,14 +112,14 @@ def validate_dependencies(app_config):
     if not shutil.which(cmd):
         missing.append(f"{cmd} ({label} CLI - ensure {label} is installed and on PATH)")
     if missing:
-        print("Missing dependencies:")
+        print(f"{RED}Missing dependencies:{RST}")
         for dep in missing:
-            print(f"  - {dep}")
+            print(f"  {RED}- {dep}{RST}")
         sys.exit(1)
 
 
 def start_recording(output_path):
-    print(f"Starting screen recording -> {output_path}")
+    print(f"{CYN}Starting screen recording{RST} -> {DIM}{output_path}{RST}")
     proc = subprocess.Popen(
         [
             "ffmpeg", "-y",
@@ -115,16 +139,16 @@ def start_recording(output_path):
 
 
 def stop_recording(proc):
-    print("Stopping screen recording...")
+    print(f"{CYN}Stopping screen recording...{RST}")
     try:
         proc.stdin.write(b"q")
         proc.stdin.flush()
         proc.wait(timeout=10)
     except subprocess.TimeoutExpired:
-        print("Warning: ffmpeg did not stop gracefully, killing process.")
+        print(f"{YEL}Warning: ffmpeg did not stop gracefully, killing process.{RST}")
         proc.kill()
     except Exception as e:
-        print(f"Warning: error stopping recording: {e}")
+        print(f"{YEL}Warning: error stopping recording: {e}{RST}")
         proc.kill()
 
 
@@ -197,9 +221,9 @@ def capture_jupyter_server_log(page, log_path):
         os.makedirs(os.path.dirname(log_path), exist_ok=True)
         with open(log_path, "w", encoding="utf-8") as f:
             f.write(log_text)
-        print(f"  Jupyter Server log saved to {log_path}")
+        print(f"  {CYN}Jupyter Server log saved to{RST} {DIM}{log_path}{RST}")
     else:
-        print("  Warning: Jupyter Server log was empty.")
+        print(f"  {YEL}Warning: Jupyter Server log was empty.{RST}")
 
 
 def extract_cell_execution_time(page):
@@ -243,7 +267,7 @@ def wait_for_cell_done(page, notebook_path, timeout=300, poll_interval=5):
     exec_time is the VS Code-reported execution time in seconds (or wall-clock
     elapsed time as a fallback).
     """
-    print(f"  Waiting for cell execution to complete (up to {timeout}s)...")
+    print(f"  {CYN}Waiting for cell execution to complete (up to {timeout}s)...{RST}")
     start = time.time()
 
     while time.time() - start < timeout:
@@ -260,21 +284,21 @@ def wait_for_cell_done(page, notebook_path, timeout=300, poll_interval=5):
             # Extract the execution time from VS Code's UI
             ui_time = extract_cell_execution_time(page)
             if ui_time is not None:
-                print(f"  Cell succeeded (marker found). VS Code execution time: {ui_time:.1f}s")
+                print(f"  {GRN}Cell succeeded (marker found). VS Code execution time: {ui_time:.1f}s{RST}")
             else:
                 ui_time = elapsed
-                print(f"  Cell succeeded (marker found). Wall-clock time: {ui_time:.1f}s (UI time not found)")
+                print(f"  {GRN}Cell succeeded (marker found). Wall-clock time: {ui_time:.1f}s{RST} {DIM}(UI time not found){RST}")
             return True, ui_time
         elif result is False:
             ui_time = extract_cell_execution_time(page)
             if ui_time is None:
                 ui_time = elapsed
-            print(f"  Cell failed after {ui_time:.1f}s (error found in output).")
+            print(f"  {RED}Cell failed after {ui_time:.1f}s (error found in output).{RST}")
             return False, ui_time
         else:
-            print(f"  Still running ({elapsed:.0f}s elapsed)...")
+            print(f"  {DIM}Still running ({elapsed:.0f}s elapsed)...{RST}")
 
-    print(f"  Timed out after {timeout}s, assuming failure.")
+    print(f"  {RED}Timed out after {timeout}s, assuming failure.{RST}")
     return False, timeout
 
 
@@ -282,7 +306,7 @@ def launch_app(app_config):
     """Launch the editor app with Chrome DevTools Protocol enabled."""
     cmd = app_config["command"]
     label = app_config["label"]
-    print(f"Launching {label} with --remote-debugging-port={DEBUG_PORT}...")
+    print(f"{CYN}Launching {BOLD}{label}{RST}{CYN} with --remote-debugging-port={DEBUG_PORT}...{RST}")
     subprocess.Popen(
         [cmd, f"--remote-debugging-port={DEBUG_PORT}"],
         shell=True,
@@ -296,22 +320,22 @@ def connect_to_app(pw, app_config, retries=5, delay=3):
     window_titles = app_config["window_titles"]
     for attempt in range(1, retries + 1):
         try:
-            print(f"  Connecting to {label} via CDP (attempt {attempt}/{retries})...")
+            print(f"  {CYN}Connecting to {label} via CDP (attempt {attempt}/{retries})...{RST}")
             browser = pw.chromium.connect_over_cdp(f"http://localhost:{DEBUG_PORT}")
             # Find the main editor window
             for context in browser.contexts:
                 for p in context.pages:
                     title = p.title() or ""
                     if any(wt in title for wt in window_titles):
-                        print(f"  Connected to: {title}")
+                        print(f"  {GRN}Connected to: {title}{RST}")
                         return browser, p
             # Fallback to first page
             page = browser.contexts[0].pages[0]
-            print(f"  Connected to: {page.title()}")
+            print(f"  {GRN}Connected to: {page.title()}{RST}")
             return browser, page
         except Exception as e:
             if attempt < retries:
-                print(f"  Connection failed ({e}), retrying in {delay}s...")
+                print(f"  {YEL}Connection failed ({e}), retrying in {delay}s...{RST}")
                 time.sleep(delay)
             else:
                 raise RuntimeError(f"Could not connect to {label} CDP after {retries} attempts: {e}")
@@ -328,7 +352,7 @@ def automate_vscode(page, run_number=1):
         os.remove(notebook_path)
 
     # Step 2: Create new Jupyter Notebook via command palette
-    print("Creating new Jupyter Notebook...")
+    print(f"{CYN}Creating new Jupyter Notebook...{RST}")
     run_command_palette(page, "Create: New Jupyter Notebook")
     time.sleep(3)
 
@@ -341,14 +365,14 @@ def automate_vscode(page, run_number=1):
     time.sleep(0.5)
 
     # Step 3: Paste PySpark code into the cell
-    print("Pasting PySpark code...")
+    print(f"{CYN}Pasting PySpark code...{RST}")
     pyperclip.copy(PYSPARK_CODE)
     page.keyboard.press("Control+V")
     time.sleep(2)
 
     # Save the notebook to a known path so we can read its outputs later.
     # Ctrl+S on an untitled notebook opens a native Save As dialog — use pyautogui for that.
-    print(f"Saving notebook to {notebook_path}...")
+    print(f"{CYN}Saving notebook to{RST} {DIM}{notebook_path}{RST}{CYN}...{RST}")
     page.keyboard.press("Control+S")
     time.sleep(2)
     pyperclip.copy(notebook_path)
@@ -360,7 +384,7 @@ def automate_vscode(page, run_number=1):
     time.sleep(2)
 
     # Step 4: Open kernel picker via command palette
-    print("Opening kernel picker...")
+    print(f"{CYN}Opening kernel picker...{RST}")
     run_command_palette(page, "Notebook: Select Notebook Kernel")
     time.sleep(1)
 
@@ -368,40 +392,40 @@ def automate_vscode(page, run_number=1):
     rows = page.locator(".quick-input-list .monaco-list-row").all()
     options = [row.inner_text(timeout=2000) for row in rows]
     if any("Select Another Kernel" in opt for opt in options):
-        print("Selecting 'Select Another Kernel'...")
+        print(f"{CYN}Selecting 'Select Another Kernel'...{RST}")
         select_from_quick_pick(page, "Select Another Kernel")
         time.sleep(1)
     else:
-        print("'Select Another Kernel' not found, skipping step 5.")
+        print(f"{DIM}'Select Another Kernel' not found, skipping step 5.{RST}")
 
     # Step 6: Select "Remote Spark Kernel"
-    print("Selecting 'Remote Spark Kernel'...")
+    print(f"{CYN}Selecting 'Remote Spark Kernel'...{RST}")
     select_from_quick_pick(page, "Remote Spark Kernel")
     time.sleep(1)
 
     # Step 7: Wait for the kernel list to populate, then select the first one.
     # This is where Playwright shines — we wait for actual DOM elements to appear
     # instead of doing flaky screenshot comparisons.
-    print("Waiting for kernel list to populate (this may take a while)...")
+    print(f"{CYN}Waiting for kernel list to populate (this may take a while)...{RST}")
     first_kernel = page.locator(".quick-input-list .monaco-list-row").first
     first_kernel.wait_for(state="visible", timeout=120_000)
-    print("  Kernel list populated.")
+    print(f"  {GRN}Kernel list populated.{RST}")
     time.sleep(1)
     first_kernel.click()
 
     # Wait for kernel to finish connecting
-    print("  Waiting for kernel to connect...")
+    print(f"  {CYN}Waiting for kernel to connect...{RST}")
     # The quick-input should close once a kernel is selected; wait for it to disappear.
     page.locator(".quick-input-widget").wait_for(state="hidden", timeout=120_000)
-    print("  Kernel connected.")
+    print(f"  {GRN}Kernel connected.{RST}")
     time.sleep(2)
 
     # Step 8: Execute all cells
-    print("Executing all cells...")
+    print(f"{CYN}Executing all cells...{RST}")
     run_command_palette(page, "Notebook: Run All")
 
     # Steps 9-10: Wait for execution to complete and check result
-    print("Waiting for notebook execution to complete...")
+    print(f"{CYN}Waiting for notebook execution to complete...{RST}")
     success, exec_time = wait_for_cell_done(page, notebook_path, timeout=300, poll_interval=5)
 
     return success, exec_time
@@ -411,7 +435,7 @@ def close_app(app_config):
     """Fully close the editor app."""
     label = app_config["label"]
     process_name = app_config["process_name"]
-    print(f"Closing {label}...")
+    print(f"{CYN}Closing {label}...{RST}")
     subprocess.run(f"taskkill /IM {process_name} /F", shell=True,
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(3)
@@ -427,13 +451,13 @@ def prevent_sleep():
     ctypes.windll.kernel32.SetThreadExecutionState(
         ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED
     )
-    print("Sleep prevention enabled.")
+    print(f"{GRN}Sleep prevention enabled.{RST}")
 
 
 def allow_sleep():
     """Restore normal Windows sleep behavior."""
     ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
-    print("Sleep prevention disabled.")
+    print(f"{DIM}Sleep prevention disabled.{RST}")
 
 
 GSHEETS_SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
@@ -444,15 +468,15 @@ GSHEETS_CREDS_PATH = os.path.join(os.path.dirname(__file__), "credentials.json")
 def gsheets_login():
     """Interactive OAuth login flow. Saves token.json for future use."""
     if not os.path.exists(GSHEETS_CREDS_PATH):
-        print(f"ERROR: {GSHEETS_CREDS_PATH} not found.")
-        print("Download OAuth client credentials from Google Cloud Console")
-        print("and save as credentials.json in the project directory.")
+        print(f"{RED}ERROR: {GSHEETS_CREDS_PATH} not found.{RST}")
+        print(f"{RED}Download OAuth client credentials from Google Cloud Console{RST}")
+        print(f"{RED}and save as credentials.json in the project directory.{RST}")
         sys.exit(1)
     flow = InstalledAppFlow.from_client_secrets_file(GSHEETS_CREDS_PATH, GSHEETS_SCOPES)
     creds = flow.run_local_server(port=0)
     with open(GSHEETS_TOKEN_PATH, "w") as f:
         f.write(creds.to_json())
-    print(f"Login successful. Token saved to {GSHEETS_TOKEN_PATH}")
+    print(f"{GRN}Login successful.{RST} Token saved to {DIM}{GSHEETS_TOKEN_PATH}{RST}")
 
 
 def get_gsheets_client():
@@ -476,10 +500,10 @@ def validate_gsheets_token():
     """Check that a valid Google Sheets token exists. Exit if not."""
     client = get_gsheets_client()
     if client is None:
-        print("ERROR: No valid Google Sheets token found.")
-        print("Run 'python automate.py login' first to authenticate.")
+        print(f"{RED}ERROR: No valid Google Sheets token found.{RST}")
+        print(f"{RED}Run 'python automate.py login' first to authenticate.{RST}")
         sys.exit(1)
-    print("Google Sheets token is valid.")
+    print(f"{GRN}Google Sheets token is valid.{RST}")
 
 
 def append_to_google_sheet(sheet_id, row_data):
@@ -497,7 +521,7 @@ def append_to_google_sheet(sheet_id, row_data):
                                   "Failure Summary"])
         worksheet.append_row(row_data, insert_data_option=InsertDataOption.insert_rows)
     except Exception as e:
-        print(f"  Warning: failed to write to Google Sheet: {e}")
+        print(f"  {YEL}Warning: failed to write to Google Sheet: {e}{RST}")
 
 
 def analyze_log_with_gemini(log_path, client):
@@ -514,7 +538,7 @@ def analyze_log_with_gemini(log_path, client):
         summary = response.text.strip()
         return summary[:150]
     except Exception as e:
-        print(f"  Warning: Gemini analysis failed: {e}")
+        print(f"  {YEL}Warning: Gemini analysis failed: {e}{RST}")
         return ""
 
 
@@ -526,10 +550,10 @@ def create_grid_video(video_paths, output_path):
     """
     n = len(video_paths)
     if n == 0:
-        print("No videos to combine.")
+        print(f"{DIM}No videos to combine.{RST}")
         return
     if n == 1:
-        print("Only one video, skipping grid creation.")
+        print(f"{DIM}Only one video, skipping grid creation.{RST}")
         return
 
     cols = math.ceil(math.sqrt(n))
@@ -552,7 +576,7 @@ def create_grid_video(video_paths, output_path):
     cell_w -= cell_w % 2
     cell_h -= cell_h % 2
 
-    print(f"\nCreating {cols}x{rows} grid video from {n} recordings ({cell_w}x{cell_h} per cell)...")
+    print(f"\n{MAG}Creating {cols}x{rows} grid video from {n} recordings ({cell_w}x{cell_h} per cell)...{RST}")
 
     # Build ffmpeg inputs
     inputs = []
@@ -590,15 +614,16 @@ def create_grid_video(video_paths, output_path):
         output_path,
     ]
 
-    print(f"  Output: {output_path}")
+    print(f"  Output: {DIM}{output_path}{RST}")
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode == 0:
-        print("  Grid video created successfully.")
+        print(f"  {GRN}Grid video created successfully.{RST}")
     else:
-        print(f"  Error creating grid video:\n{result.stderr[-500:]}")
+        print(f"  {RED}Error creating grid video:\n{result.stderr[-500:]}{RST}")
 
 
 def main():
+    print(BANNER)
     parser = argparse.ArgumentParser(description="Automate VS Code / Antigravity Jupyter Notebook creation with screen recording")
     subparsers = parser.add_subparsers(dest="command")
 
@@ -641,9 +666,9 @@ def main():
         try:
             gemini_client = genai.Client(api_key=gemini_api_key)
             gemini_client.models.generate_content(model="gemini-2.5-flash", contents="test")
-            print("Gemini API key is valid.")
+            print(f"{GRN}Gemini API key is valid.{RST}")
         except Exception as e:
-            print(f"ERROR: Gemini API key validation failed: {e}")
+            print(f"{RED}ERROR: Gemini API key validation failed: {e}{RST}")
             sys.exit(1)
     if sheet_id:
         validate_gsheets_token()
@@ -659,24 +684,26 @@ def main():
     def print_summary(batch_results):
         """Print a summary table for a batch of results."""
         header = "Date\tTime\tIDE\tStatus\tCell Execution Time (s)\tTotal Time (s)\tRecording\tFailure Summary"
-        print(f"\n{'='*60}")
-        print("  RESULTS SUMMARY (tab-separated, copy/paste into Google Sheets)")
-        print(f"{'='*60}\n")
-        print(header)
+        print(f"\n{MAG}{'='*60}{RST}")
+        print(f"  {BOLD}{MAG}RESULTS SUMMARY{RST}")
+        print(f"{MAG}{'='*60}{RST}\n")
+        print(f"{DIM}{header}{RST}")
         for status, path, exec_time, total_time, start_date, start_time, summary in batch_results:
             cell_str = f"{exec_time:.1f}" if exec_time is not None else "N/A"
             total_str = f"{total_time:.1f}"
-            print(f"{start_date}\t{start_time}\t{ide_label}\t{status}\t{cell_str}\t{total_str}\t{path}\t{summary}")
+            status_color = GRN if status == "PASS" else RED
+            print(f"{start_date}\t{start_time}\t{ide_label}\t{status_color}{status}{RST}\t{cell_str}\t{total_str}\t{DIM}{path}{RST}\t{summary}")
         passed = sum(1 for s, _, _, _, _, _, _ in batch_results if s == "PASS")
         exec_times = [t for _, _, t, _, _, _, _ in batch_results if t is not None]
         total_times = [t for _, _, _, t, _, _, _ in batch_results]
         print()
-        print(f"  {passed}/{len(batch_results)} passed")
+        color = GRN if passed == len(batch_results) else YEL
+        print(f"  {color}{BOLD}{passed}/{len(batch_results)} passed{RST}")
         if exec_times:
-            print(f"  Average cell execution time: {sum(exec_times) / len(exec_times):.1f}s")
+            print(f"  {BLU}Average cell execution time: {sum(exec_times) / len(exec_times):.1f}s{RST}")
         if total_times:
-            print(f"  Average total time: {sum(total_times) / len(total_times):.1f}s")
-        print(f"\n{'='*60}\n")
+            print(f"  {BLU}Average total time: {sum(total_times) / len(total_times):.1f}s{RST}")
+        print(f"\n{MAG}{'='*60}{RST}\n")
 
     def build_grid_video(batch_results, app_name):
         """Create a grid video from failed runs only."""
@@ -709,14 +736,14 @@ def main():
             success, exec_time = automate_vscode(page, run_number=run_number)
             time.sleep(2)
         except Exception as e:
-            print(f"Error during run {run_number}: {e}")
+            print(f"{RED}Error during run {run_number}: {e}{RST}")
         finally:
             total_time = time.time() - total_start
             if not success:
                 try:
                     capture_jupyter_server_log(page, log_path)
                 except Exception as e:
-                    print(f"  Warning: failed to capture log: {e}")
+                    print(f"  {YEL}Warning: failed to capture log: {e}{RST}")
             stop_recording(ffmpeg_proc)
             try:
                 browser.close()
@@ -729,14 +756,14 @@ def main():
         if success and os.path.exists(output_path):
             os.remove(output_path)
             output_path = ""
-            print(f"\nRun {run_number}: {status} (video deleted)")
+            print(f"\n{BOLD}{GRN}Run {run_number}: PASS{RST} {DIM}(video deleted){RST}")
         else:
-            print(f"\nRun {run_number}: {status} -> {output_path}")
+            print(f"\n{BOLD}{RED}Run {run_number}: FAIL{RST} -> {DIM}{output_path}{RST}")
             # Analyze log with Gemini if available
             if gemini_client and os.path.exists(log_path):
                 failure_summary = analyze_log_with_gemini(log_path, gemini_client)
                 if failure_summary:
-                    print(f"  Failure summary: {failure_summary}")
+                    print(f"  {YEL}Failure summary: {failure_summary}{RST}")
         result = (status, output_path, exec_time, total_time, run_start_date, run_start_time, failure_summary)
 
         # Append to history file immediately
@@ -766,9 +793,9 @@ def main():
                 batch = []
                 run_number = 1
                 while True:
-                    print(f"\n{'='*60}")
-                    print(f"  Run {run_number} (loop mode, {app_config['label']})")
-                    print(f"{'='*60}\n")
+                    print(f"\n{BLU}{'='*60}{RST}")
+                    print(f"  {BOLD}{BLU}Run {run_number}{RST} {CYN}(loop mode, {app_config['label']}){RST}")
+                    print(f"{BLU}{'='*60}{RST}\n")
 
                     result = run_once(pw, run_number)
                     results.append(result)
@@ -782,28 +809,28 @@ def main():
                     run_number += 1
 
                     if stop_after_current_run.is_set():
-                        print("\nStopping after ESC key press.")
+                        print(f"\n{YEL}Stopping after ESC key press.{RST}")
                         if batch:
                             print_summary(batch)
                             build_grid_video(batch, args.app)
                         break
             else:
                 for i in range(1, args.n + 1):
-                    print(f"\n{'='*60}")
-                    print(f"  Run {i} of {args.n} ({app_config['label']})")
-                    print(f"{'='*60}\n")
+                    print(f"\n{BLU}{'='*60}{RST}")
+                    print(f"  {BOLD}{BLU}Run {i} of {args.n}{RST} {CYN}({app_config['label']}){RST}")
+                    print(f"{BLU}{'='*60}{RST}\n")
 
                     result = run_once(pw, i)
                     results.append(result)
 
                     if stop_after_current_run.is_set():
-                        print("\nStopping after ESC key press.")
+                        print(f"\n{YEL}Stopping after ESC key press.{RST}")
                         break
 
                 print_summary(results)
                 build_grid_video(results, args.app)
     except KeyboardInterrupt:
-        print("\n\nInterrupted by user.")
+        print(f"\n\n{YEL}Interrupted by user.{RST}")
         if results:
             # Print summary of whatever we completed
             remaining = results[len(results) - len(results) % 9:] if args.loop else results
