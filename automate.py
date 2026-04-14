@@ -14,6 +14,7 @@ import sys
 import threading
 import time
 
+from google import genai
 import gspread
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -492,10 +493,29 @@ def append_to_google_sheet(sheet_id, row_data):
         # Add header if sheet is empty
         if worksheet.row_count == 0 or not worksheet.cell(1, 1).value:
             worksheet.append_row(["Date", "Time", "IDE", "Status",
-                                  "Cell Execution Time (s)", "Total Time (s)", "Recording"])
+                                  "Cell Execution Time (s)", "Total Time (s)", "Recording",
+                                  "Failure Summary"])
         worksheet.append_row(row_data, insert_data_option=InsertDataOption.insert_rows)
     except Exception as e:
         print(f"  Warning: failed to write to Google Sheet: {e}")
+
+
+def analyze_log_with_gemini(log_path, client):
+    """Use Gemini to analyze a Jupyter server log and summarize the failure."""
+    try:
+        with open(log_path, "r", encoding="utf-8") as f:
+            log_text = f.read()
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=f"Analyze this Jupyter server log from a failed PySpark notebook run. "
+            f"Summarize what went wrong in 150 characters or less. Be specific and concise. "
+            f"Do not use markdown. Reply with ONLY the summary, nothing else.\n\n{log_text}",
+        )
+        summary = response.text.strip()
+        return summary[:150]
+    except Exception as e:
+        print(f"  Warning: Gemini analysis failed: {e}")
+        return ""
 
 
 def create_grid_video(video_paths, output_path):
@@ -615,6 +635,16 @@ def main():
     app_config = APP_CONFIGS[args.app]
     validate_dependencies(app_config)
 
+    gemini_api_key = config.get("gemini_api_key")
+    gemini_client = None
+    if gemini_api_key:
+        try:
+            gemini_client = genai.Client(api_key=gemini_api_key)
+            gemini_client.models.generate_content(model="gemini-2.5-flash", contents="test")
+            print("Gemini API key is valid.")
+        except Exception as e:
+            print(f"ERROR: Gemini API key validation failed: {e}")
+            sys.exit(1)
     if sheet_id:
         validate_gsheets_token()
     os.makedirs(args.output_dir, exist_ok=True)
@@ -623,23 +653,23 @@ def main():
     prevent_sleep()
 
     ide_label = app_config["label"]
-    history_header = "Date\tTime\tIDE\tStatus\tCell Execution Time (s)\tTotal Time (s)\tRecording"
+    history_header = "Date\tTime\tIDE\tStatus\tCell Execution Time (s)\tTotal Time (s)\tRecording\tFailure Summary"
     history_path = os.path.join(args.output_dir, "history.txt")
 
     def print_summary(batch_results):
         """Print a summary table for a batch of results."""
-        header = "Date\tTime\tIDE\tStatus\tCell Execution Time (s)\tTotal Time (s)\tRecording"
+        header = "Date\tTime\tIDE\tStatus\tCell Execution Time (s)\tTotal Time (s)\tRecording\tFailure Summary"
         print(f"\n{'='*60}")
         print("  RESULTS SUMMARY (tab-separated, copy/paste into Google Sheets)")
         print(f"{'='*60}\n")
         print(header)
-        for status, path, exec_time, total_time, start_date, start_time in batch_results:
+        for status, path, exec_time, total_time, start_date, start_time, summary in batch_results:
             cell_str = f"{exec_time:.1f}" if exec_time is not None else "N/A"
             total_str = f"{total_time:.1f}"
-            print(f"{start_date}\t{start_time}\t{ide_label}\t{status}\t{cell_str}\t{total_str}\t{path}")
-        passed = sum(1 for s, _, _, _, _, _ in batch_results if s == "PASS")
-        exec_times = [t for _, _, t, _, _, _ in batch_results if t is not None]
-        total_times = [t for _, _, _, t, _, _ in batch_results]
+            print(f"{start_date}\t{start_time}\t{ide_label}\t{status}\t{cell_str}\t{total_str}\t{path}\t{summary}")
+        passed = sum(1 for s, _, _, _, _, _, _ in batch_results if s == "PASS")
+        exec_times = [t for _, _, t, _, _, _, _ in batch_results if t is not None]
+        total_times = [t for _, _, _, t, _, _, _ in batch_results]
         print()
         print(f"  {passed}/{len(batch_results)} passed")
         if exec_times:
@@ -650,7 +680,7 @@ def main():
 
     def build_grid_video(batch_results, app_name):
         """Create a grid video from failed runs only."""
-        video_paths = [path for status, path, _, _, _, _ in batch_results if status == "FAIL" and os.path.exists(path)]
+        video_paths = [path for status, path, _, _, _, _, _ in batch_results if status == "FAIL" and os.path.exists(path)]
         if len(video_paths) > 1:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             grid_dir = os.path.join(args.output_dir, datetime.now().strftime("%Y-%m-%d"))
@@ -669,6 +699,7 @@ def main():
         browser, page = connect_to_app(pw, app_config)
 
         ffmpeg_proc = start_recording(output_path)
+        log_path = output_path.replace(".mp4", "_jupyter_server.log")
         success = False
         exec_time = None
         run_start_date = datetime.now().strftime("%Y-%m-%d")
@@ -682,7 +713,6 @@ def main():
         finally:
             total_time = time.time() - total_start
             if not success:
-                log_path = output_path.replace(".mp4", "_jupyter_server.log")
                 try:
                     capture_jupyter_server_log(page, log_path)
                 except Exception as e:
@@ -694,13 +724,20 @@ def main():
                 pass
 
         status = "PASS" if success else "FAIL"
+        failure_summary = ""
         # Delete video for passing runs to save disk space
         if success and os.path.exists(output_path):
             os.remove(output_path)
+            output_path = ""
             print(f"\nRun {run_number}: {status} (video deleted)")
         else:
             print(f"\nRun {run_number}: {status} -> {output_path}")
-        result = (status, output_path, exec_time, total_time, run_start_date, run_start_time)
+            # Analyze log with Gemini if available
+            if gemini_client and os.path.exists(log_path):
+                failure_summary = analyze_log_with_gemini(log_path, gemini_client)
+                if failure_summary:
+                    print(f"  Failure summary: {failure_summary}")
+        result = (status, output_path, exec_time, total_time, run_start_date, run_start_time, failure_summary)
 
         # Append to history file immediately
         cell_str = f"{exec_time:.1f}" if exec_time is not None else "N/A"
@@ -709,12 +746,12 @@ def main():
         with open(history_path, "a", encoding="utf-8") as f:
             if write_header:
                 f.write(history_header + "\n")
-            f.write(f"{run_start_date}\t{run_start_time}\t{ide_label}\t{status}\t{cell_str}\t{total_str}\t{output_path}\n")
+            f.write(f"{run_start_date}\t{run_start_time}\t{ide_label}\t{status}\t{cell_str}\t{total_str}\t{output_path}\t{failure_summary}\n")
 
         # Append to Google Sheet if configured
         if sheet_id:
             append_to_google_sheet(sheet_id, [
-                run_start_date, run_start_time, ide_label, status, cell_str, total_str, output_path
+                run_start_date, run_start_time, ide_label, status, cell_str, total_str, output_path, failure_summary
             ])
 
         return result

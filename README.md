@@ -83,7 +83,7 @@ output/
 After each run, a tab-separated row is appended to `output/history.txt`:
 
 ```
-Date    Time    IDE    Status    Cell Execution Time (s)    Total Time (s)    Recording
+Date    Time    IDE    Status    Cell Execution Time (s)    Total Time (s)    Recording    Failure Summary
 ```
 
 This file is designed to be copy-pasted directly into Google Sheets.
@@ -96,10 +96,11 @@ To also push results to a Google Sheet in real time:
 2. Create an **OAuth 2.0 Client ID** (application type: Desktop)
 3. Download the JSON and save it as `credentials.json` in the project root
 4. Enable the **Google Sheets API** in your project
-5. Copy `config.example.json` to `config.json` and set your sheet ID:
+5. Copy `config.example.json` to `config.json` and fill in your values:
    ```json
    {
-     "sheet_id": "YOUR_GOOGLE_SHEET_ID_HERE"
+     "sheet_id": "YOUR_GOOGLE_SHEET_ID_HERE",
+     "gemini_api_key": "YOUR_GEMINI_API_KEY_HERE"
    }
    ```
 6. Run the login command once (opens a browser for Google login):
@@ -112,6 +113,10 @@ To also push results to a Google Sheet in real time:
    ```
 
 The token is cached in `token.json` and refreshed automatically. If the token is missing or invalid when `sheet_id` is configured, the script will exit with an error prompting you to run `login` again. `config.json`, `credentials.json`, and `token.json` are all gitignored.
+
+### Failure analysis
+
+When `gemini_api_key` is set in `config.json`, failed runs are automatically analyzed: the Jupyter server log is sent to Gemini, which returns a short summary (150 chars max) of what went wrong. This summary appears in the console output, `history.txt`, and Google Sheets.
 
 ## Sleep prevention
 
