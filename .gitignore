@@ -1,3 +1,4 @@
 output/
+config.json
 credentials.json
 token.json

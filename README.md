@@ -45,8 +45,6 @@ Press `Ctrl+C` to stop gracefully. A summary of any remaining runs in the curren
 | `-n N` | `1` | Number of runs |
 | `--loop` | off | Run forever, building a grid video every 9 runs |
 | `--output-dir DIR` | `output` | Output directory for recordings and history |
-| `--sheet-id ID` | none | Google Sheet ID to append results to |
-
 The `run` subcommand is the default -- you can omit it and flags work the same way.
 
 ## What it does
@@ -98,16 +96,22 @@ To also push results to a Google Sheet in real time:
 2. Create an **OAuth 2.0 Client ID** (application type: Desktop)
 3. Download the JSON and save it as `credentials.json` in the project root
 4. Enable the **Google Sheets API** in your project
-5. Run the login command once (opens a browser for Google login):
+5. Copy `config.example.json` to `config.json` and set your sheet ID:
+   ```json
+   {
+     "sheet_id": "YOUR_GOOGLE_SHEET_ID_HERE"
+   }
+   ```
+6. Run the login command once (opens a browser for Google login):
    ```bash
    python automate.py login
    ```
-6. Run with `--sheet-id YOUR_SHEET_ID`:
+7. Run as usual — results are pushed automatically when `sheet_id` is present in the config:
    ```bash
-   python automate.py run --app antigravity --loop --sheet-id YOUR_SHEET_ID
+   python automate.py run --app antigravity --loop
    ```
 
-The token is cached in `token.json` and refreshed automatically. If the token is missing or invalid when `--sheet-id` is used, the script will exit with an error prompting you to run `login` again. Both `credentials.json` and `token.json` are gitignored.
+The token is cached in `token.json` and refreshed automatically. If the token is missing or invalid when `sheet_id` is configured, the script will exit with an error prompting you to run `login` again. `config.json`, `credentials.json`, and `token.json` are all gitignored.
 
 ## Sleep prevention
 

@@ -593,9 +593,6 @@ def main():
                             help="Run forever, building a grid video every 9 runs")
     run_parser.add_argument("--app", choices=["vscode", "antigravity"], default="vscode",
                             help="Which editor to automate (default: vscode)")
-    run_parser.add_argument("--sheet-id", default=None,
-                            help="Google Sheet ID to append results to (optional)")
-
     args = parser.parse_args()
 
     # Default to "run" if no subcommand given
@@ -607,10 +604,18 @@ def main():
         gsheets_login()
         return
 
+    # Load config
+    config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
+    config = {}
+    if os.path.exists(config_path):
+        with open(config_path, "r") as f:
+            config = json.load(f)
+    sheet_id = config.get("sheet_id")
+
     app_config = APP_CONFIGS[args.app]
     validate_dependencies(app_config)
 
-    if args.sheet_id:
+    if sheet_id:
         validate_gsheets_token()
     os.makedirs(args.output_dir, exist_ok=True)
 
@@ -707,8 +712,8 @@ def main():
             f.write(f"{run_start_date}\t{run_start_time}\t{ide_label}\t{status}\t{cell_str}\t{total_str}\t{output_path}\n")
 
         # Append to Google Sheet if configured
-        if args.sheet_id:
-            append_to_google_sheet(args.sheet_id, [
+        if sheet_id:
+            append_to_google_sheet(sheet_id, [
                 run_start_date, run_start_time, ide_label, status, cell_str, total_str, output_path
             ])
 
