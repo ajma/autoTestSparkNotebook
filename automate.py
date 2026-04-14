@@ -644,8 +644,8 @@ def main():
         print(f"\n{'='*60}\n")
 
     def build_grid_video(batch_results, app_name):
-        """Create a grid video from a batch of results."""
-        video_paths = [path for _, path, _, _, _, _ in batch_results if os.path.exists(path)]
+        """Create a grid video from failed runs only."""
+        video_paths = [path for status, path, _, _, _, _ in batch_results if status == "FAIL" and os.path.exists(path)]
         if len(video_paths) > 1:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             grid_dir = os.path.join(args.output_dir, datetime.now().strftime("%Y-%m-%d"))
@@ -689,8 +689,13 @@ def main():
                 pass
 
         status = "PASS" if success else "FAIL"
+        # Delete video for passing runs to save disk space
+        if success and os.path.exists(output_path):
+            os.remove(output_path)
+            print(f"\nRun {run_number}: {status} (video deleted)")
+        else:
+            print(f"\nRun {run_number}: {status} -> {output_path}")
         result = (status, output_path, exec_time, total_time, run_start_date, run_start_time)
-        print(f"\nRun {run_number}: {status} -> {output_path}")
 
         # Append to history file immediately
         cell_str = f"{exec_time:.1f}" if exec_time is not None else "N/A"
