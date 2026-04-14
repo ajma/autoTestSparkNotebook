@@ -5,6 +5,7 @@ import ctypes
 from datetime import datetime
 import json
 import math
+import msvcrt
 import os
 import re
 import shutil
@@ -23,6 +24,22 @@ import pyperclip
 from playwright.sync_api import sync_playwright
 
 NOTEBOOK_SAVE_DIR = os.path.join(os.path.expanduser("~"), "spark_test_notebooks")
+
+# Event that signals "stop after the current run finishes"
+stop_after_current_run = threading.Event()
+
+
+def _esc_listener():
+    """Background thread: poll for ESC key and set the stop event."""
+    while not stop_after_current_run.is_set():
+        if msvcrt.kbhit():
+            key = msvcrt.getch()
+            if key == b'\x1b':  # ESC
+                print("\n>>> ESC pressed — will stop after the current run finishes. <<<")
+                stop_after_current_run.set()
+                return
+        time.sleep(0.1)
+
 DEBUG_PORT = 9222
 
 APP_CONFIGS = {
@@ -692,6 +709,10 @@ def main():
 
         return result
 
+    # Start background thread listening for ESC key
+    esc_thread = threading.Thread(target=_esc_listener, daemon=True)
+    esc_thread.start()
+
     try:
         with sync_playwright() as pw:
             if args.loop:
@@ -712,6 +733,13 @@ def main():
                         batch = []
 
                     run_number += 1
+
+                    if stop_after_current_run.is_set():
+                        print("\nStopping after ESC key press.")
+                        if batch:
+                            print_summary(batch)
+                            build_grid_video(batch, args.app)
+                        break
             else:
                 for i in range(1, args.n + 1):
                     print(f"\n{'='*60}")
@@ -720,6 +748,10 @@ def main():
 
                     result = run_once(pw, i)
                     results.append(result)
+
+                    if stop_after_current_run.is_set():
+                        print("\nStopping after ESC key press.")
+                        break
 
                 print_summary(results)
                 build_grid_video(results, args.app)
