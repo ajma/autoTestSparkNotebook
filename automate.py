@@ -1,4 +1,4 @@
-"""Automate VS Code Jupyter Notebook creation with screen recording."""
+"""Unattended automation tool that launches VS Code or Antigravity, creates a Jupyter notebook, connects to a remote Spark kernel via the Data Cloud Extension, executes PySpark code, records the screen, and logs results to Google Sheets."""
 
 import argparse
 import ctypes
@@ -26,18 +26,43 @@ from playwright.sync_api import sync_playwright
 
 NOTEBOOK_SAVE_DIR = os.path.join(os.path.expanduser("~"), "spark_test_notebooks")
 
-BANNER = """
-  \033[91m  _____                  _  \033[93m_______        _   \033[0m
-  \033[91m / ____|                | |\033[93m|__   __|      | |  \033[0m
-  \033[38;5;208m| (___  _ __   __ _ _ __| | _\033[93m| | ___  ___| |_ \033[0m
-  \033[33m \\___ \\| '_ \\ / _` | '__| |/ /\033[93m |/ _ \\/ __| __|\033[0m
-  \033[32m ____) | |_) | (_| | |  |   <\033[96m| |  __/\\__ \\ |_ \033[0m
-  \033[36m|_____/| .__/ \\__,_|_|  |_|\\_\\\033[94m_|\\___||___/\\__|\033[0m
-  \033[34m       | |\033[0m
-  \033[35m       |_|\033[0m
+_BANNER_LINES = [
+    ("\033[91m",   r"            _      _____       _   ___                _   "),
+    ("\033[38;5;208m", r"  __ _ _  _| |_ __|_   _|__ __| |_/ __|_ __  __ _ _ _| |__"),
+    ("\033[33m",   r" / _` | || |  _/ _ \| |/ -_|_-<  _\__ \ '_ \/ _` | '_| / /"),
+    ("\033[32m",   r" \__,_|\_,_|\__\___/|_|\___/__/\__|___/ .__/\__,_|_| |_\_\ "),
+    ("\033[32m",   r"                                      |_|                  "),
+    ("\033[36m",   r"           _  _     _       _              _              "),
+    ("\033[34m",   r"          | \| |___| |_ ___| |__  ___  ___| |__          "),
+    ("\033[35m",   r"          | .` / _ \  _/ -_) '_ \/ _ \/ _ \ / /          "),
+    ("\033[95m",   r"          |_|\_\___/\__\___|_.__/\___/\___/_\_\           "),
+]
+_BANNER_SUBTITLE = "\033[96mData Cloud Extension\033[0m \033[2m· Unattended Mode\033[0m"
+_BANNER_SUBTITLE_LEN = len("Data Cloud Extension · Unattended Mode")
 
-  \033[96mData Cloud Extension\033[0m \033[2m· Unattended Mode\033[0m
-"""
+
+def _build_banner():
+    w = 80
+    art_width = max(len(text) for _, text in _BANNER_LINES)
+    RST = "\033[0m"
+    DIM_CLR = "\033[2m"
+    lines = []
+    lines.append(f"{DIM_CLR}{'=' * w}{RST}")
+    lines.append(f"{DIM_CLR}|{' ' * (w - 2)}|{RST}")
+    for color, text in _BANNER_LINES:
+        padded = text.ljust(art_width)
+        pad_total = w - 4 - art_width
+        pad_left = pad_total // 2
+        pad_right = pad_total - pad_left
+        lines.append(f"{DIM_CLR}|{RST} {' ' * pad_left}{color}{padded}{RST}{' ' * pad_right} {DIM_CLR}|{RST}")
+    lines.append(f"{DIM_CLR}|{' ' * (w - 2)}|{RST}")
+    sub_pad_total = w - 4 - _BANNER_SUBTITLE_LEN
+    sub_left = sub_pad_total // 2
+    sub_right = sub_pad_total - sub_left
+    lines.append(f"{DIM_CLR}|{RST} {' ' * sub_left}{_BANNER_SUBTITLE}{' ' * sub_right} {DIM_CLR}|{RST}")
+    lines.append(f"{DIM_CLR}|{' ' * (w - 2)}|{RST}")
+    lines.append(f"{DIM_CLR}{'=' * w}{RST}")
+    return "\n".join(lines)
 
 # ANSI color codes
 RST = "\033[0m"
@@ -623,15 +648,17 @@ def create_grid_video(video_paths, output_path):
 
 
 def main():
-    print(BANNER)
-    parser = argparse.ArgumentParser(description="Automate VS Code / Antigravity Jupyter Notebook creation with screen recording")
-    subparsers = parser.add_subparsers(dest="command")
+    print(_build_banner())
+    parser = argparse.ArgumentParser(
+        description="Unattended automation tool that launches VS Code or Antigravity, creates a Jupyter notebook, connects to a remote Spark kernel via the Data Cloud Extension, executes PySpark code, records the screen, and logs results to Google Sheets.",
+        formatter_class=lambda prog: argparse.HelpFormatter(prog, width=80))
+    subparsers = parser.add_subparsers(dest="command", title="commands")
 
     # Login subcommand
     subparsers.add_parser("login", help="Authenticate with Google Sheets (interactive OAuth login)")
 
     # Run subcommand (default)
-    run_parser = subparsers.add_parser("run", help="Run the automation (default)")
+    run_parser = subparsers.add_parser("run", help="Run the automation")
     run_parser.add_argument("--output-dir", default="output", help="Output directory for recordings (default: output)")
     run_parser.add_argument("-n", type=int, default=1, help="Number of times to run the automation (default: 1)")
     run_parser.add_argument("--loop", action="store_true",
@@ -640,10 +667,10 @@ def main():
                             help="Which editor to automate (default: vscode)")
     args = parser.parse_args()
 
-    # Default to "run" if no subcommand given
+    # Show help if no subcommand given
     if args.command is None:
-        args = run_parser.parse_args()
-        args.command = "run"
+        parser.print_help()
+        return
 
     if args.command == "login":
         gsheets_login()
