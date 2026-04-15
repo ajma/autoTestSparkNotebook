@@ -1,5 +1,7 @@
 # autoTestSparkNotebook
 
+![CLI help output](docs/cli-help.png)
+
 Automated testing of PySpark notebook execution via the Data Cloud Extension in VS Code and Antigravity (a VS Code fork). Launches the IDE, creates a Jupyter notebook, connects to a remote Spark kernel provided by Data Cloud Extension, runs PySpark code, and records the screen -- all unattended.
 
 ## Prerequisites
@@ -45,7 +47,7 @@ Press `Ctrl+C` to stop gracefully. A summary of any remaining runs in the curren
 | `-n N` | `1` | Number of runs |
 | `--loop` | off | Run forever, building a grid video every 9 runs |
 | `--output-dir DIR` | `output` | Output directory for recordings and history |
-The `run` subcommand is the default -- you can omit it and flags work the same way.
+Running with no arguments displays the banner and help. Use `run` or `login` to start.
 
 ## What it does
 
