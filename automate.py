@@ -1,11 +1,9 @@
 """Unattended automation tool that launches VS Code or Antigravity, creates a Jupyter notebook, connects to a remote Spark kernel via the Data Cloud Extension, executes PySpark code, records the screen, and logs results to Google Sheets."""
 
 import argparse
-import ctypes
 from datetime import datetime
 import json
 import math
-import msvcrt
 import os
 import re
 import shutil
@@ -13,6 +11,24 @@ import subprocess
 import sys
 import threading
 import time
+
+# Platform detection
+IS_WINDOWS = sys.platform == "win32"
+IS_MACOS = sys.platform == "darwin"
+IS_LINUX = sys.platform.startswith("linux")
+
+# Platform-specific imports
+if IS_WINDOWS:
+    import ctypes
+    import msvcrt
+else:
+    import select
+    import termios
+    import tty
+
+# Modifier key: Cmd on macOS, Ctrl on Windows/Linux
+MOD_KEY = "Meta" if IS_MACOS else "Control"       # Playwright keyboard
+PYAUTOGUI_MOD = "command" if IS_MACOS else "ctrl"  # pyautogui hotkey
 
 from google import genai
 import gspread
@@ -81,27 +97,44 @@ stop_after_current_run = threading.Event()
 
 def _esc_listener():
     """Background thread: poll for ESC key and set the stop event."""
-    while not stop_after_current_run.is_set():
-        if msvcrt.kbhit():
-            key = msvcrt.getch()
-            if key == b'\x1b':  # ESC
-                print(f"\n{BOLD}{YEL}>>> ESC pressed — will stop after the current run finishes. <<<{RST}")
-                stop_after_current_run.set()
-                return
-        time.sleep(0.1)
+    if IS_WINDOWS:
+        while not stop_after_current_run.is_set():
+            if msvcrt.kbhit():
+                key = msvcrt.getch()
+                if key == b'\x1b':  # ESC
+                    print(f"\n{BOLD}{YEL}>>> ESC pressed — will stop after the current run finishes. <<<{RST}")
+                    stop_after_current_run.set()
+                    return
+            time.sleep(0.1)
+    else:
+        fd = sys.stdin.fileno()
+        if not os.isatty(fd):
+            return
+        old_settings = termios.tcgetattr(fd)
+        try:
+            tty.setcbreak(fd)
+            while not stop_after_current_run.is_set():
+                if select.select([sys.stdin], [], [], 0.1)[0]:
+                    key = sys.stdin.read(1)
+                    if key == '\x1b':  # ESC
+                        print(f"\n{BOLD}{YEL}>>> ESC pressed — will stop after the current run finishes. <<<{RST}")
+                        stop_after_current_run.set()
+                        return
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 
 DEBUG_PORT = 9222
 
 APP_CONFIGS = {
     "vscode": {
         "command": "code",
-        "process_name": "Code.exe",
+        "process_name": "Code.exe" if IS_WINDOWS else "code",
         "window_titles": ["Visual Studio Code", "Code"],
         "label": "VS Code",
     },
     "antigravity": {
         "command": "antigravity",
-        "process_name": "Antigravity.exe",
+        "process_name": "Antigravity.exe" if IS_WINDOWS else "antigravity",
         "window_titles": ["Antigravity"],
         "label": "Antigravity",
     },
@@ -131,7 +164,13 @@ print("EXECUTION_COMPLETE_MARKER")'''
 def validate_dependencies(app_config):
     missing = []
     if not shutil.which("ffmpeg"):
-        missing.append("ffmpeg (install via: winget install Gyan.FFmpeg)")
+        if IS_WINDOWS:
+            hint = "winget install Gyan.FFmpeg"
+        elif IS_MACOS:
+            hint = "brew install ffmpeg"
+        else:
+            hint = "sudo apt install ffmpeg"
+        missing.append(f"ffmpeg (install via: {hint})")
     cmd = app_config["command"]
     label = app_config["label"]
     if not shutil.which(cmd):
@@ -143,14 +182,36 @@ def validate_dependencies(app_config):
         sys.exit(1)
 
 
+def _get_screen_size():
+    """Get screen resolution for Linux x11grab capture."""
+    try:
+        output = subprocess.check_output(
+            ["xdpyinfo"], text=True, stderr=subprocess.DEVNULL
+        )
+        match = re.search(r"dimensions:\s+(\d+x\d+)", output)
+        if match:
+            return match.group(1)
+    except Exception:
+        pass
+    return "1920x1080"
+
+
 def start_recording(output_path):
     print(f"{CYN}Starting screen recording{RST} -> {DIM}{output_path}{RST}")
+    if IS_WINDOWS:
+        capture_args = ["-f", "gdigrab", "-framerate", "30", "-i", "desktop"]
+    elif IS_MACOS:
+        capture_args = ["-f", "avfoundation", "-framerate", "30",
+                        "-capture_cursor", "1", "-i", "1:none"]
+    else:
+        screen_size = _get_screen_size()
+        display = os.environ.get("DISPLAY", ":0.0")
+        capture_args = ["-f", "x11grab", "-framerate", "30",
+                        "-video_size", screen_size, "-i", display]
     proc = subprocess.Popen(
         [
             "ffmpeg", "-y",
-            "-f", "gdigrab",
-            "-framerate", "30",
-            "-i", "desktop",
+            *capture_args,
             "-c:v", "libx264",
             "-pix_fmt", "yuv420p",
             output_path,
@@ -204,7 +265,7 @@ def check_notebook_output(notebook_path):
 
 def run_command_palette(page, command, timeout=10000):
     """Open the VS Code quick open (Ctrl+P), prefix with '>' to run a command, and select the first match."""
-    page.keyboard.press("Control+P")
+    page.keyboard.press(f"{MOD_KEY}+P")
     input_box = page.locator(".quick-input-widget .input")
     input_box.wait_for(state="visible", timeout=5000)
     input_box.fill("")
@@ -236,9 +297,9 @@ def capture_jupyter_server_log(page, log_path):
     time.sleep(1)
 
     # Select all text in the output panel and copy it
-    page.keyboard.press("Control+A")
+    page.keyboard.press(f"{MOD_KEY}+A")
     time.sleep(0.3)
-    page.keyboard.press("Control+C")
+    page.keyboard.press(f"{MOD_KEY}+C")
     time.sleep(0.5)
 
     log_text = pyperclip.paste()
@@ -299,7 +360,7 @@ def wait_for_cell_done(page, notebook_path, timeout=300, poll_interval=5):
         time.sleep(poll_interval)
 
         # Save the notebook so output is flushed to disk
-        page.keyboard.press("Control+S")
+        page.keyboard.press(f"{MOD_KEY}+S")
         time.sleep(2)
 
         result = check_notebook_output(notebook_path)
@@ -334,7 +395,7 @@ def launch_app(app_config):
     print(f"{CYN}Launching {BOLD}{label}{RST}{CYN} with --remote-debugging-port={DEBUG_PORT}...{RST}")
     subprocess.Popen(
         [cmd, f"--remote-debugging-port={DEBUG_PORT}"],
-        shell=True,
+        shell=IS_WINDOWS,
     )
     time.sleep(5)
 
@@ -392,18 +453,34 @@ def automate_vscode(page, run_number=1):
     # Step 3: Paste PySpark code into the cell
     print(f"{CYN}Pasting PySpark code...{RST}")
     pyperclip.copy(PYSPARK_CODE)
-    page.keyboard.press("Control+V")
+    page.keyboard.press(f"{MOD_KEY}+V")
     time.sleep(2)
 
     # Save the notebook to a known path so we can read its outputs later.
-    # Ctrl+S on an untitled notebook opens a native Save As dialog — use pyautogui for that.
+    # Ctrl/Cmd+S on an untitled notebook opens a native Save As dialog — use pyautogui for that.
     print(f"{CYN}Saving notebook to{RST} {DIM}{notebook_path}{RST}{CYN}...{RST}")
-    page.keyboard.press("Control+S")
+    page.keyboard.press(f"{MOD_KEY}+S")
     time.sleep(2)
-    pyperclip.copy(notebook_path)
-    pyautogui.hotkey("ctrl", "a")
-    time.sleep(0.3)
-    pyautogui.hotkey("ctrl", "v")
+    if IS_MACOS:
+        # macOS Save dialog: Cmd+Shift+G to open "Go to Folder", navigate there
+        pyautogui.hotkey("command", "shift", "g")
+        time.sleep(1)
+        pyperclip.copy(os.path.dirname(notebook_path))
+        pyautogui.hotkey("command", "a")
+        pyautogui.hotkey("command", "v")
+        time.sleep(0.5)
+        pyautogui.press("enter")
+        time.sleep(1)
+        # Set the filename
+        pyperclip.copy(os.path.basename(notebook_path))
+        pyautogui.hotkey("command", "a")
+        pyautogui.hotkey("command", "v")
+    else:
+        # Windows/Linux: paste full path into filename field
+        pyperclip.copy(notebook_path)
+        pyautogui.hotkey(PYAUTOGUI_MOD, "a")
+        time.sleep(0.3)
+        pyautogui.hotkey(PYAUTOGUI_MOD, "v")
     time.sleep(0.5)
     pyautogui.press("enter")
     time.sleep(2)
@@ -461,8 +538,12 @@ def close_app(app_config):
     label = app_config["label"]
     process_name = app_config["process_name"]
     print(f"{CYN}Closing {label}...{RST}")
-    subprocess.run(f"taskkill /IM {process_name} /F", shell=True,
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if IS_WINDOWS:
+        subprocess.run(f"taskkill /IM {process_name} /F", shell=True,
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    else:
+        subprocess.run(["pkill", "-f", process_name],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(3)
 
 
@@ -470,18 +551,39 @@ ES_CONTINUOUS = 0x80000000
 ES_SYSTEM_REQUIRED = 0x00000001
 ES_DISPLAY_REQUIRED = 0x00000002
 
+_caffeinate_proc = None
+
 
 def prevent_sleep():
-    """Tell Windows to stay awake (prevent sleep and display off)."""
-    ctypes.windll.kernel32.SetThreadExecutionState(
-        ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED
-    )
+    """Prevent the system from sleeping."""
+    global _caffeinate_proc
+    if IS_WINDOWS:
+        ctypes.windll.kernel32.SetThreadExecutionState(
+            ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED
+        )
+    elif IS_MACOS:
+        _caffeinate_proc = subprocess.Popen(
+            ["caffeinate", "-dims"],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    else:
+        subprocess.run(["xset", "s", "off", "-dpms"],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     print(f"{GRN}Sleep prevention enabled.{RST}")
 
 
 def allow_sleep():
-    """Restore normal Windows sleep behavior."""
-    ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
+    """Restore normal sleep behavior."""
+    global _caffeinate_proc
+    if IS_WINDOWS:
+        ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
+    elif IS_MACOS:
+        if _caffeinate_proc:
+            _caffeinate_proc.terminate()
+            _caffeinate_proc = None
+    else:
+        subprocess.run(["xset", "s", "on", "+dpms"],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     print(f"{DIM}Sleep prevention disabled.{RST}")
 
 

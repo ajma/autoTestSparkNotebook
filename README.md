@@ -2,12 +2,17 @@
 
 ![CLI help output](docs/cli-help.png)
 
-Automated testing of PySpark notebook execution via the Data Cloud Extension in VS Code and Antigravity (a VS Code fork). Launches the IDE, creates a Jupyter notebook, connects to a remote Spark kernel provided by Data Cloud Extension, runs PySpark code, and records the screen -- all unattended.
+Cross-platform automated testing of PySpark notebook execution via the Data Cloud Extension in VS Code and Antigravity (a VS Code fork). Launches the IDE, creates a Jupyter notebook, connects to a remote Spark kernel provided by Data Cloud Extension, runs PySpark code, and records the screen -- all unattended.
+
+Supports **Windows**, **macOS**, and **Linux**.
 
 ## Prerequisites
 
 - **Python 3.10+**
-- **ffmpeg** -- `winget install Gyan.FFmpeg`
+- **ffmpeg**:
+  - Windows: `winget install Gyan.FFmpeg`
+  - macOS: `brew install ffmpeg`
+  - Linux: `sudo apt install ffmpeg`
 - **VS Code** and/or **Antigravity** on PATH (`code` / `antigravity`), with the **Data Cloud Extension** installed
 - **Playwright** -- `pip install playwright && playwright install chromium`
 
@@ -122,4 +127,8 @@ When `gemini_api_key` is set in `config.json`, failed runs are automatically ana
 
 ## Sleep prevention
 
-The script uses the Windows `SetThreadExecutionState` API to prevent the laptop from sleeping or turning off the display during automation. Normal sleep behavior is restored when the script exits.
+The script prevents the system from sleeping during automation and restores normal behavior on exit:
+
+- **Windows**: `SetThreadExecutionState` API
+- **macOS**: `caffeinate` subprocess
+- **Linux**: `xset -dpms`
