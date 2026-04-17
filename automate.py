@@ -810,6 +810,13 @@ def main():
     history_header = "Date\tTime\tIDE\tStatus\tCell Execution Time (s)\tTotal Time (s)\tRecording\tFailure Summary"
     history_path = os.path.join(args.output_dir, "history.txt")
 
+    def print_running_tally(all_results):
+        passed = sum(1 for s, _, _, _, _, _, _ in all_results if s == "PASS")
+        total = len(all_results)
+        pct = (passed / total * 100) if total else 0
+        color = GRN if passed == total else YEL
+        print(f"  {color}{BOLD}{passed}/{total} passing ({pct:.0f}%){RST}")
+
     def print_summary(batch_results):
         """Print a summary table for a batch of results."""
         header = "Date\tTime\tIDE\tStatus\tCell Execution Time (s)\tTotal Time (s)\tRecording\tFailure Summary"
@@ -929,6 +936,7 @@ def main():
                     result = run_once(pw, run_number)
                     results.append(result)
                     batch.append(result)
+                    print_running_tally(results)
 
                     if len(batch) == 9:
                         print_summary(batch)
@@ -951,6 +959,7 @@ def main():
 
                     result = run_once(pw, i)
                     results.append(result)
+                    print_running_tally(results)
 
                     if stop_after_current_run.is_set():
                         print(f"\n{YEL}Stopping after ESC key press.{RST}")
