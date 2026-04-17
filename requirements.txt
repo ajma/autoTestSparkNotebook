@@ -1,3 +1,8 @@
 numpy
 pyautogui
 pyperclip
+playwright
+gspread
+google-auth
+google-auth-oauthlib
+google-genai
