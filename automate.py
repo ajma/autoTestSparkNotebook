@@ -343,7 +343,7 @@ def extract_cell_execution_time(page):
     return None
 
 
-def wait_for_cell_done(page, notebook_path, timeout=300, poll_interval=5):
+def wait_for_cell_done(page, notebook_path, timeout=300, poll_interval=3):
     """Wait for cell execution to complete by polling the saved notebook file.
 
     Periodically triggers Ctrl+S to save the notebook, then reads the .ipynb
@@ -356,35 +356,51 @@ def wait_for_cell_done(page, notebook_path, timeout=300, poll_interval=5):
     print(f"  {CYN}Waiting for cell execution to complete (up to {timeout}s)...{RST}")
     start = time.time()
 
-    while time.time() - start < timeout:
-        time.sleep(poll_interval)
+    spinner = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+    rainbow = ["\033[91m", "\033[93m", "\033[92m", "\033[96m", "\033[94m", "\033[95m"]
+    spin_idx = 0
+    next_poll = start + poll_interval
 
-        # Save the notebook so output is flushed to disk
-        page.keyboard.press(f"{MOD_KEY}+S")
+    poll_result = [None]  # shared with background thread: True / False / None
+    poll_thread = None
+
+    def _poll_notebook():
         time.sleep(2)
+        poll_result[0] = check_notebook_output(notebook_path)
 
-        result = check_notebook_output(notebook_path)
-        elapsed = time.time() - start
+    while time.time() - start < timeout:
+        now = time.time()
+        elapsed = now - start
 
-        if result is True:
-            # Extract the execution time from VS Code's UI
-            ui_time = extract_cell_execution_time(page)
-            if ui_time is not None:
-                print(f"  {GRN}Cell succeeded (marker found). VS Code execution time: {ui_time:.1f}s{RST}")
-            else:
-                ui_time = elapsed
-                print(f"  {GRN}Cell succeeded (marker found). Wall-clock time: {ui_time:.1f}s{RST} {DIM}(UI time not found){RST}")
-            return True, ui_time
-        elif result is False:
-            ui_time = extract_cell_execution_time(page)
-            if ui_time is None:
-                ui_time = elapsed
-            print(f"  {RED}Cell failed after {ui_time:.1f}s (error found in output).{RST}")
-            return False, ui_time
-        else:
-            print(f"  {DIM}Still running ({elapsed:.0f}s elapsed)...{RST}")
+        if now >= next_poll and (poll_thread is None or not poll_thread.is_alive()):
+            result = poll_result[0]
+            if result is True:
+                ui_time = extract_cell_execution_time(page)
+                if ui_time is not None:
+                    print(f"\r  {GRN}Cell succeeded (marker found). VS Code execution time: {ui_time:.1f}s{RST}    ")
+                else:
+                    ui_time = elapsed
+                    print(f"\r  {GRN}Cell succeeded (marker found). Wall-clock time: {ui_time:.1f}s{RST} {DIM}(UI time not found){RST}    ")
+                return True, ui_time
+            elif result is False:
+                ui_time = extract_cell_execution_time(page)
+                if ui_time is None:
+                    ui_time = elapsed
+                print(f"\r  {RED}Cell failed after {ui_time:.1f}s (error found in output).{RST}    ")
+                return False, ui_time
 
-    print(f"  {RED}Timed out after {timeout}s, assuming failure.{RST}")
+            page.keyboard.press(f"{MOD_KEY}+S")
+            poll_result[0] = None
+            poll_thread = threading.Thread(target=_poll_notebook, daemon=True)
+            poll_thread.start()
+            next_poll = now + poll_interval
+
+        color = rainbow[spin_idx % len(rainbow)]
+        print(f"\r  {DIM}Still running ({elapsed:.0f}s elapsed)... {color}{spinner[spin_idx % len(spinner)]}{RST}    ", end="", flush=True)
+        spin_idx += 1
+        time.sleep(0.08)
+
+    print(f"\r  {RED}Timed out after {timeout}s, assuming failure.{RST}    ")
     return False, timeout
 
 
